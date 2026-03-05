@@ -1,1 +1,1 @@
-from .mnist_cnn import MNISTCNN
+from models.tiny_cnn import TinyCNN
