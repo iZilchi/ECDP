@@ -57,8 +57,8 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
 
 def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
                            c_values=[1.5, 2.0, 2.5, 3.0],
-                           alpha_values=[0.6, 0.7, 0.8, 0.9],
-                           warm_up_values=[0, 3, 5]):
+                           alpha_values=[0.6, 0.7, 0.8],
+                           warm_up_values=[0, 3]):
     """Sensitivity analysis for correction parameters."""
     _, test_loader = get_skin_cancer_dataloaders(num_clients=3)
     best_acc = -1
