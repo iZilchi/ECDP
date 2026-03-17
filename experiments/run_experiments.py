@@ -2,6 +2,9 @@ import argparse
 import torch
 import sys
 import os
+import random
+import numpy as np
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
@@ -9,14 +12,25 @@ from models.tiny_cnn import TinyCNN
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import compare_methods_comprehensive
-import numpy as np
 import matplotlib.pyplot as plt
 
+def set_seed(seed):
+    """Set all random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # For deterministic behavior on GPU (may slow down)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
-                   c=2.5, alpha=0.8, warm_up=5, plot=True):
+                   c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True):
     print(f"\n{'='*60}")
-    print(f"COMPARISON: ε={epsilon}, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}")
+    print(f"COMPARISON: ε={epsilon}, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
     print('='*60)
+
+    set_seed(seed)  # <-- set seed before creating loaders
 
     client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
 
@@ -50,27 +64,27 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_eps{epsilon}.png', dpi=150)
+        plt.savefig(f'results/convergence_eps{epsilon}_seed{seed}.png', dpi=150)
         plt.show()
 
     return metrics, histories, test_loader
 
 def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
                            c_values=[1.5, 2.0, 2.5, 3.0],
-                           alpha_values=[0.6, 0.7, 0.8],
-                           warm_up_values=[0, 3]):
+                           alpha_values=[0.6, 0.7, 0.8, 0.9],
+                           warm_up_values=[0, 3, 5],
+                           seed=42):
     """Sensitivity analysis for correction parameters."""
-    _, test_loader = get_skin_cancer_dataloaders(num_clients=3)
     best_acc = -1
     best_params = {}
     for c in c_values:
         for alpha in alpha_values:
             for warm_up in warm_up_values:
                 print(f"\n--- Testing c={c}, α={alpha}, warm_up={warm_up} ---")
-                # Run a short comparison (no plotting)
+                # Use a different seed for each combo? For fairness, use the same base seed.
+                # We'll just pass the same seed to each run.
                 _, histories, _ = run_comparison(epsilon, clip_norm, num_rounds, device,
-                                                  c, alpha, warm_up, plot=False)
-                # Get final accuracy of EC-DP-FL
+                                                  c, alpha, warm_up, seed=seed, plot=False)
                 acc = histories['EC-DP-FL'][-1]
                 print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
                 if acc > best_acc:
@@ -79,20 +93,12 @@ def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
     print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
     return best_params
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu'):
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42):
     print("\n" + "="*70)
     print("PRIVACY‑UTILITY TRADEOFF ANALYSIS")
     print("="*70)
 
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
-
-    # Train Standard FL once (no privacy)
-    std_fl = StandardFL(3, TinyCNN, device)
-    for r in range(num_rounds):
-        std_fl.train_round(client_loaders, epochs=2)
-    std_acc = std_fl.test_accuracy(test_loader)
-    print(f"\nStandard FL accuracy: {std_acc:.2f}%\n")
-
+    # We'll run multiple trials with different seeds
     basic_means, ecdp_means = [], []
     basic_stds, ecdp_stds = [], []
 
@@ -100,10 +106,21 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
         print(f"\n--- ε = {eps} ---")
         basic_accs, ecdp_accs = [], []
         for trial in range(num_trials):
-            print(f"  Trial {trial+1}/{num_trials}")
+            seed = base_seed + trial  # different seed per trial
+            print(f"  Trial {trial+1}/{num_trials} (seed={seed})")
+            # For tradeoff, we might want fixed correction params; using defaults from manuscript:
+            # For high privacy (small ε) use aggressive, for low privacy use mild.
+            if eps <= 0.5:
+                c, alpha, warm_up = 1.5, 0.6, 3
+            else:
+                c, alpha, warm_up = 2.5, 0.8, 0
+            # Or you could use tuned params from previous runs; here we keep it simple.
             dp = BasicDPFL(3, TinyCNN, device, eps, clip_norm=clip_norm)
             ec = ECDPFL(3, TinyCNN, device, eps, clip_norm=clip_norm,
-                        c=2.5, alpha=0.8, warm_up=5)  # you may use tuned params here
+                        c=c, alpha=alpha, warm_up=warm_up)
+            # Train both methods with same seed for fair comparison
+            set_seed(seed)
+            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
             for r in range(num_rounds):
                 dp.train_round(client_loaders, epochs=2)
                 ec.train_round(client_loaders, epochs=2)
@@ -122,6 +139,13 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
     plt.figure(figsize=(10,6))
     plt.errorbar(epsilon_values, basic_means, yerr=basic_stds, marker='o', label='Basic DP-FL', capsize=5)
     plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
+    # Standard FL accuracy (run once with a fixed seed)
+    set_seed(base_seed)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    std_fl = StandardFL(3, TinyCNN, device)
+    for r in range(num_rounds):
+        std_fl.train_round(client_loaders, epochs=2)
+    std_acc = std_fl.test_accuracy(test_loader)
     plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
     plt.xscale('log')
     plt.xlabel('Privacy budget ε (lower = more private)')
@@ -140,6 +164,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_norm', type=float, default=2.1)
     parser.add_argument('--rounds', type=int, default=10)
     parser.add_argument('--device', default='cpu')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     # Correction parameters (used if mode=comparison)
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
@@ -153,9 +178,11 @@ if __name__ == '__main__':
 
     if args.mode == 'comparison':
         run_comparison(args.epsilon, args.clip_norm, args.rounds, device,
-                       args.c, args.alpha, args.warm_up)
+                       args.c, args.alpha, args.warm_up, seed=args.seed)
     elif args.mode == 'tradeoff':
         epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
-        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3, device=device)
+        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3,
+                     device=device, base_seed=args.seed)
     elif args.mode == 'tune':
-        tune_correction_params(args.epsilon, args.clip_norm, args.rounds, device)
+        tune_correction_params(args.epsilon, args.clip_norm, args.rounds, device,
+                               seed=args.seed)
