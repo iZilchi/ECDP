@@ -8,36 +8,54 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
-from models.tiny_cnn import TinyCNN
+from models.medium_cnn import MediumCNN
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import compare_methods_comprehensive
 import matplotlib.pyplot as plt
 
 def set_seed(seed):
-    """Set all random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # For deterministic behavior on GPU (may slow down)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
                    c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True):
     print(f"\n{'='*60}")
-    print(f"COMPARISON: ε={epsilon}, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
+    if per_round_epsilon is not None:
+        mode = "per‑round ε"
+        eps = per_round_epsilon
+    else:
+        mode = "total ε"
+        eps = target_epsilon
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
     print('='*60)
 
-    set_seed(seed)  # <-- set seed before creating loaders
+    set_seed(seed)
 
     client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
 
-    std_fl = StandardFL(3, TinyCNN, device)
-    dp_fl = BasicDPFL(3, TinyCNN, device, epsilon, clip_norm=clip_norm)
-    ecdp_fl = ECDPFL(3, TinyCNN, device, epsilon, clip_norm=clip_norm,
-                     c=c, alpha=alpha, warm_up=warm_up)
+    std_fl = StandardFL(3, MediumCNN, device)
+    
+    if per_round_epsilon is not None:
+        dp_fl = BasicDPFL(3, MediumCNN, device,
+                          epsilon=per_round_epsilon,
+                          clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, MediumCNN, device,
+                         epsilon=per_round_epsilon,
+                         clip_norm=clip_norm,
+                         c=c, alpha=alpha, warm_up=warm_up)
+    else:
+        dp_fl = BasicDPFL(3, MediumCNN, device,
+                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
+                          clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, MediumCNN, device,
+                         epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
+                         clip_norm=clip_norm,
+                         c=c, alpha=alpha, warm_up=warm_up)
 
     methods = {'Standard FL': std_fl, 'Basic DP-FL': dp_fl, 'EC-DP-FL': ecdp_fl}
     histories = {}
@@ -60,16 +78,16 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
-        plt.title(f'Convergence (ε={epsilon}, C={clip_norm}, c={c}, α={alpha})')
+        plt.title(f'Convergence ({mode}={eps})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_eps{epsilon}_seed{seed}.png', dpi=150)
+        plt.savefig(f'results/convergence_{mode}_{eps}_seed{seed}.png', dpi=150)
         plt.show()
 
     return metrics, histories, test_loader
 
-def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
+def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
                            c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8],
                            warm_up_values=[0, 3],
@@ -81,9 +99,7 @@ def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
         for alpha in alpha_values:
             for warm_up in warm_up_values:
                 print(f"\n--- Testing c={c}, α={alpha}, warm_up={warm_up} ---")
-                # Use a different seed for each combo? For fairness, use the same base seed.
-                # We'll just pass the same seed to each run.
-                _, histories, _ = run_comparison(epsilon, clip_norm, num_rounds, device,
+                _, histories, _ = run_comparison(per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
                                                   c, alpha, warm_up, seed=seed, plot=False)
                 acc = histories['EC-DP-FL'][-1]
                 print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
@@ -93,37 +109,50 @@ def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
     print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
     return best_params
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42):
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42, mode='per_round'):
     print("\n" + "="*70)
-    print("PRIVACY‑UTILITY TRADEOFF ANALYSIS")
+    print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε)")
     print("="*70)
 
-    # We'll run multiple trials with different seeds
     basic_means, ecdp_means = [], []
     basic_stds, ecdp_stds = [], []
 
     for eps in epsilon_values:
-        print(f"\n--- ε = {eps} ---")
+        print(f"\n--- {mode} ε = {eps} ---")
         basic_accs, ecdp_accs = [], []
         for trial in range(num_trials):
-            seed = base_seed + trial  # different seed per trial
+            seed = base_seed + trial
             print(f"  Trial {trial+1}/{num_trials} (seed={seed})")
-            # For tradeoff, we might want fixed correction params; using defaults from manuscript:
-            # For high privacy (small ε) use aggressive, for low privacy use mild.
+            set_seed(seed)
+            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+
+            # Heuristic correction parameters (can be replaced with tuned ones)
             if eps <= 0.5:
                 c, alpha, warm_up = 1.5, 0.6, 3
             else:
                 c, alpha, warm_up = 2.5, 0.8, 0
-            # Or you could use tuned params from previous runs; here we keep it simple.
-            dp = BasicDPFL(3, TinyCNN, device, eps, clip_norm=clip_norm)
-            ec = ECDPFL(3, TinyCNN, device, eps, clip_norm=clip_norm,
-                        c=c, alpha=alpha, warm_up=warm_up)
-            # Train both methods with same seed for fair comparison
-            set_seed(seed)
-            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+
+            if mode == 'per_round':
+                dp = BasicDPFL(3, MediumCNN, device,
+                               epsilon=eps,
+                               clip_norm=clip_norm)
+                ec = ECDPFL(3, MediumCNN, device,
+                            epsilon=eps,
+                            clip_norm=clip_norm,
+                            c=c, alpha=alpha, warm_up=warm_up)
+            else:
+                dp = BasicDPFL(3, MediumCNN, device,
+                               epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
+                               clip_norm=clip_norm)
+                ec = ECDPFL(3, MediumCNN, device,
+                            epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
+                            clip_norm=clip_norm,
+                            c=c, alpha=alpha, warm_up=warm_up)
+
             for r in range(num_rounds):
                 dp.train_round(client_loaders, epochs=2)
                 ec.train_round(client_loaders, epochs=2)
+
             basic_accs.append(dp.test_accuracy(test_loader))
             ecdp_accs.append(ec.test_accuracy(test_loader))
 
@@ -139,30 +168,36 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
     plt.figure(figsize=(10,6))
     plt.errorbar(epsilon_values, basic_means, yerr=basic_stds, marker='o', label='Basic DP-FL', capsize=5)
     plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
-    # Standard FL accuracy (run once with a fixed seed)
+    # Standard FL accuracy (run once)
     set_seed(base_seed)
     client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
-    std_fl = StandardFL(3, TinyCNN, device)
+    std_fl = StandardFL(3, MediumCNN, device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
     std_acc = std_fl.test_accuracy(test_loader)
     plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
     plt.xscale('log')
-    plt.xlabel('Privacy budget ε (lower = more private)')
+    plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
-    plt.title('Privacy‑Utility Tradeoff')
+    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
-    plt.savefig('results/tradeoff.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{mode}.png', dpi=150)
     plt.show()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune'], default='comparison')
-    parser.add_argument('--epsilon', type=float, default=20.0)
-    parser.add_argument('--clip_norm', type=float, default=2.1)
-    parser.add_argument('--rounds', type=int, default=10)
+    # Privacy budget: either per-round or total
+    parser.add_argument('--per_round_epsilon', type=float, default=None,
+                        help='Per‑round privacy budget (if using per‑round interpretation)')
+    parser.add_argument('--target_epsilon', type=float, default=None,
+                        help='Total privacy budget over all rounds (if using total interpretation)')
+    parser.add_argument('--clip_norm', type=float, default=2.3,
+                        help='Clipping norm (suggested from analyze_gradients.py)')
+    parser.add_argument('--rounds', type=int, default=20,
+                        help='Number of federation rounds')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     # Correction parameters (used if mode=comparison)
@@ -176,13 +211,21 @@ if __name__ == '__main__':
     else:
         device = torch.device('cpu')
 
+    # Ensure exactly one of per_round_epsilon or target_epsilon is set for comparison/tune
+    if args.mode in ['comparison', 'tune']:
+        assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
+            "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
+
     if args.mode == 'comparison':
-        run_comparison(args.epsilon, args.clip_norm, args.rounds, device,
+        run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
                        args.c, args.alpha, args.warm_up, seed=args.seed)
     elif args.mode == 'tradeoff':
+        # For tradeoff, we need to know which interpretation. Default to per_round.
+        # You can add a --tradeoff_mode argument if desired.
+        print("Tradeoff mode uses per‑round epsilon by default. Modify code if total epsilon needed.")
         epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3,
-                     device=device, base_seed=args.seed)
+                     device=device, base_seed=args.seed, mode='per_round')
     elif args.mode == 'tune':
-        tune_correction_params(args.epsilon, args.clip_norm, args.rounds, device,
+        tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
                                seed=args.seed)

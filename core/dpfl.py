@@ -8,29 +8,37 @@ from utils.privacy_accountant import RDPAccountant
 class BasicDPFL(FederatedLearningBase):
     """
     Differentially Private Federated Learning with correct noise addition.
-    Includes RDP accounting.
+    Supports either per‑round epsilon or total target epsilon.
     """
     def __init__(self, num_clients, model_class, device,
-                 epsilon, delta=1e-5, clip_norm=1.0,
+                 epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100):
         super().__init__(num_clients, model_class, device)
-        self.dp = DifferentialPrivacy(epsilon, delta, clip_norm)
-        self.epsilon = epsilon
-        self.epsilon_target = target_epsilon
+        # Exactly one of epsilon or target_epsilon must be provided
+        assert (epsilon is not None) or (target_epsilon is not None), \
+            "Either epsilon or target_epsilon must be provided"
+        self.epsilon = epsilon                # per‑round epsilon
+        self.epsilon_target = target_epsilon  # total epsilon over max_rounds
         self.delta = delta
         self.clip_norm = clip_norm
         self.num_clients = num_clients
         self.max_rounds = max_rounds
         self.accountant = RDPAccountant(delta)
         self.noise_scale = None
+        # Create the DifferentialPrivacy helper (epsilon placeholder not used)
+        self.dp = DifferentialPrivacy(epsilon=1.0, delta=delta, clip_norm=clip_norm)
 
     def _compute_noise_scale(self):
+        """Compute noise multiplier for this round."""
+        sensitivity = self.clip_norm / self.num_clients
         if self.epsilon_target is not None:
             eps_per_round = self.epsilon_target / self.max_rounds
-            sigma = self.clip_norm * np.sqrt(2 * np.log(1.25 / self.delta)) / eps_per_round
+            sigma = sensitivity * np.sqrt(2 * np.log(1.25 / self.delta)) / eps_per_round
             return sigma
         else:
-            return self.clip_norm * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
+            # per‑round epsilon
+            sigma = sensitivity * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
+            return sigma
 
     def _train_client_get_update(self, global_weights, dataloader, epochs):
         raw_update = super()._train_client_get_update(global_weights, dataloader, epochs)
@@ -41,7 +49,7 @@ class BasicDPFL(FederatedLearningBase):
         avg_update = super()._aggregate_updates(client_updates)
         if self.noise_scale is None:
             self.noise_scale = self._compute_noise_scale()
-        # Account for this round
+        # Account for this round (RDP)
         self.accountant.add_round(self.noise_scale)
         noisy_avg = self.dp.add_noise(avg_update, self.noise_scale)
         return noisy_avg
@@ -53,10 +61,9 @@ class BasicDPFL(FederatedLearningBase):
 class ECDPFL(BasicDPFL):
     """
     Error‑Corrected Differentially Private Federated Learning.
-    Correction parameters can be tuned via sensitivity analysis.
     """
     def __init__(self, num_clients, model_class, device,
-                 epsilon, delta=1e-5, clip_norm=1.0,
+                 epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
                  c=2.5, alpha=0.8, warm_up=5, correction_momentum=0.9):
         super().__init__(num_clients, model_class, device,
