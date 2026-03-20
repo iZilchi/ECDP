@@ -16,11 +16,9 @@ import seaborn as sns
 class ComprehensiveMetrics:
     """All performance metrics from Objectives 2.1"""
     
-    def __init__(self, num_classes=7, class_names=None):
-        self.num_classes = num_classes
-        self.class_names = class_names or [
-            'akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc'
-        ]
+def __init__(self, num_classes=7, class_names=None):
+    self.num_classes = num_classes
+    self.class_names = class_names or ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
     
     def compute_all_metrics(self, model, test_loader, device):
         """
@@ -147,7 +145,8 @@ class ComprehensiveMetrics:
             'ecdp_utility_loss': std_metrics['accuracy'] - ecdp_metrics['accuracy']
         }
 
-def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device):
+def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device, num_classes=7, class_names=None):
+    metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
     """
     Comprehensive comparison matching Objectives 2.1 and 2.2
     """
