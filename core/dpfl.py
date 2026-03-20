@@ -53,7 +53,7 @@ class ECDPFL(BasicDPFL):
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
                  c=2.5, alpha=0.8, warm_up=0, correction_momentum=0.9,
-                 use_clipping=True, use_smoothing=True, use_semantic_clustering=False):
+                 use_clipping=True, use_smoothing=True):
         super().__init__(num_clients, model_class, device, participation_rate,
                          epsilon, delta, clip_norm,
                          target_epsilon, max_rounds)
@@ -62,44 +62,17 @@ class ECDPFL(BasicDPFL):
         self.warm_up = warm_up
         self.use_clipping = use_clipping
         self.use_smoothing = use_smoothing
-        self.use_semantic_clustering = use_semantic_clustering
         self.error_correction = ErrorCorrection(momentum=correction_momentum)
 
     def _aggregate_updates(self, client_updates):
-        if self.use_semantic_clustering:
-            # Simplified clustering (you can expand as needed)
-            from sklearn.cluster import KMeans
-            from sklearn.metrics.pairwise import cosine_similarity
-            flat_updates = []
-            for up in client_updates:
-                flat = torch.cat([v.flatten() for v in up.values()]).cpu().numpy()
-                flat_updates.append(flat)
-            n_clusters = min(3, len(client_updates))
-            kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(flat_updates)
-            labels = kmeans.labels_
-            cluster_centroids = []
-            for i in range(n_clusters):
-                cluster_indices = [j for j, lab in enumerate(labels) if lab == i]
-                if len(cluster_indices) == 0:
-                    continue
-                cluster_updates = [client_updates[j] for j in cluster_indices]
-                avg_cluster = {}
-                for key in cluster_updates[0].keys():
-                    stacked = torch.stack([up[key] for up in cluster_updates])
-                    avg_cluster[key] = stacked.mean(dim=0)
-                cluster_centroids.append(avg_cluster)
-            aggregated = {}
-            for key in cluster_centroids[0].keys():
-                stacked = torch.stack([c[key] for c in cluster_centroids])
-                aggregated[key] = stacked.mean(dim=0)
-        else:
-            aggregated = super()._aggregate_updates(client_updates)
-
+        # Standard aggregation (FedAvg) with DP
+        aggregated = super()._aggregate_updates(client_updates)   # aggregates client updates (no noise yet)
         if self.noise_scale is None:
             self.noise_scale = self._compute_noise_scale()
         self.accountant.add_round(self.noise_scale)
         noisy_avg = self.dp.add_noise(aggregated, self.noise_scale)
 
+        # Apply post‑aggregation error correction
         corrected_avg = self.error_correction.apply(
             noisy_avg,
             alpha=self.alpha,

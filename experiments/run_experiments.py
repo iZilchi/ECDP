@@ -57,47 +57,6 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=32, alpha=Non
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
-def train_centralized(model_class, train_loader, test_loader, device, epochs=20):
-    model = model_class().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = torch.nn.CrossEntropyLoss()
-    model.train()
-    start_time = time.time()
-    for epoch in range(epochs):
-        for data, target in train_loader:
-            data, target = data.to(device), target.to(device)
-            optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
-    total_time = time.time() - start_time
-    acc = test_centralized(model, test_loader, device)
-    param_size = sum(p.numel() for p in model.parameters())
-    # Inference latency
-    model.eval()
-    latencies = []
-    with torch.no_grad():
-        for _ in range(5):
-            data = next(iter(test_loader))[0].to(device)
-            start = time.time()
-            _ = model(data)
-            latencies.append(time.time() - start)
-    inf_latency = np.mean(latencies) * 1000
-    return model, acc, total_time, param_size, inf_latency
-
-def test_centralized(model, test_loader, device):
-    model.eval()
-    correct = total = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            _, pred = torch.max(output, 1)
-            total += target.size(0)
-            correct += (pred == target).sum().item()
-    return 100.0 * correct / total
-
 def measure_inference_latency(model, test_loader, device, num_batches=5):
     model.eval()
     latencies = []
@@ -116,7 +75,6 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                    c=2.5, alpha=0.8, warm_up=0,
                    participation_rate=0.5, seed=42, plot=True,
                    dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3,
-                   use_semantic_clustering=False,
                    ablation_use_clipping=True, ablation_use_smoothing=True):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
@@ -125,7 +83,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}, participation={participation_rate}, alpha_dirichlet={dirichlet_alpha}, batch_size={batch_size}, local_epochs={local_epochs}, semantic_clustering={use_semantic_clustering}")
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}, participation={participation_rate}, alpha_dirichlet={dirichlet_alpha}, batch_size={batch_size}, local_epochs={local_epochs}")
     print('='*60)
 
     set_seed(seed)
@@ -133,16 +91,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(
         dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
 
-    full_train_dataset = torch.utils.data.ConcatDataset([loader.dataset for loader in client_loaders])
-    full_train_loader = torch.utils.data.DataLoader(full_train_dataset, batch_size=batch_size, shuffle=True)
-
-    print("\n--- Training Centralized Baseline ---")
-    central_model, central_acc, central_time, central_param_size, central_latency = train_centralized(
-        model_class, full_train_loader, test_loader, device, epochs=20)
-    print(f"Centralized Accuracy: {central_acc:.2f}%")
-    print(f"Centralized Training Time: {central_time:.2f}s")
-    print(f"Centralized Model Size: {central_param_size:,} params")
-    print(f"Centralized Inference Latency: {central_latency:.2f}ms")
+    # No centralized training – removed
 
     std_fl = StandardFL(3, model_class, device, participation_rate=participation_rate)
     if per_round_epsilon is not None:
@@ -152,8 +101,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                          epsilon=per_round_epsilon, clip_norm=clip_norm,
                          c=c, alpha=alpha, warm_up=warm_up,
                          use_clipping=ablation_use_clipping,
-                         use_smoothing=ablation_use_smoothing,
-                         use_semantic_clustering=use_semantic_clustering)
+                         use_smoothing=ablation_use_smoothing)
     else:
         dp_fl = BasicDPFL(3, model_class, device, participation_rate=participation_rate,
                           epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
@@ -163,8 +111,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                          clip_norm=clip_norm,
                          c=c, alpha=alpha, warm_up=warm_up,
                          use_clipping=ablation_use_clipping,
-                         use_smoothing=ablation_use_smoothing,
-                         use_semantic_clustering=use_semantic_clustering)
+                         use_smoothing=ablation_use_smoothing)
 
     methods = {'Standard FL': std_fl, 'Basic DP-FL': dp_fl, 'EC-DP-FL': ecdp_fl}
     histories = {}
@@ -203,12 +150,6 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                                             num_classes=num_classes, class_names=class_names)
 
     result = {
-        'centralized': {
-            'accuracy': central_acc,
-            'training_time': central_time,
-            'model_size': central_param_size,
-            'inference_latency': central_latency
-        },
         'federated': {
             'standard': {
                 'accuracy': final_accuracies['Standard FL'],
@@ -244,7 +185,6 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
         plt.figure()
         for name, acc in histories.items():
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
-        plt.axhline(y=central_acc, color='g', linestyle='--', label='Centralized')
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
         title = f'Convergence ({mode}={eps}) - {dataset}'
@@ -280,8 +220,7 @@ def run_comparison_with_stats(args):
             dataset=args.dataset,
             dirichlet_alpha=args.dirichlet_alpha,
             batch_size=args.batch_size,
-            local_epochs=args.local_epochs,
-            use_semantic_clustering=args.use_semantic_clustering
+            local_epochs=args.local_epochs
         )
         results.append(res)
 
@@ -294,7 +233,6 @@ def run_comparison_with_stats(args):
     std_conv = [r['federated']['standard']['convergence_round'] for r in results]
     dp_conv = [r['federated']['dp']['convergence_round'] for r in results]
     ecdp_conv = [r['federated']['ecdp']['convergence_round'] for r in results]
-    central_acc = [r['centralized']['accuracy'] for r in results]
 
     def stats_str(arr):
         return f"{np.mean(arr):.2f} ± {np.std(arr):.2f}"
@@ -302,7 +240,6 @@ def run_comparison_with_stats(args):
     print("\n" + "="*70)
     print("STATISTICAL SUMMARY (10 runs)")
     print("="*70)
-    print(f"Centralized Accuracy:         {stats_str(central_acc)}%")
     print(f"Standard FL Accuracy:         {stats_str(std_acc)}%")
     print(f"Basic DP-FL Accuracy:         {stats_str(dp_acc)}%")
     print(f"EC-DP-FL Accuracy:            {stats_str(ecdp_acc)}%")
@@ -326,7 +263,6 @@ def run_comparison_with_stats(args):
 
     df = pd.DataFrame({
         'Run': range(1, num_runs+1),
-        'Centralized Acc': central_acc,
         'Standard Acc': std_acc,
         'DP Acc': dp_acc,
         'EC-DP Acc': ecdp_acc,
@@ -342,9 +278,8 @@ def run_comparison_with_stats(args):
 
 def run_tradeoff(args):
     epsilon_values = [0.1, 0.2, 0.5, 1.0, 2.0]
-    num_trials = 10  # hardcoded to 10
+    num_trials = 10
     all_results = {}
-    # Create folder for confusion matrices
     conf_mat_dir = 'results/confusion_matrices'
     os.makedirs(conf_mat_dir, exist_ok=True)
 
@@ -356,7 +291,6 @@ def run_tradeoff(args):
         for trial in range(num_trials):
             seed = args.seed + trial
             print(f"  Trial {trial+1}/{num_trials}, seed={seed}")
-            # Run the comparison (with plot=False to avoid many plots)
             res = run_comparison(
                 per_round_epsilon=eps if args.mode_per_round else None,
                 target_epsilon=eps if not args.mode_per_round else None,
@@ -368,30 +302,24 @@ def run_tradeoff(args):
                 warm_up=args.warm_up,
                 participation_rate=args.participation_rate,
                 seed=seed,
-                plot=False,  # we will create our own plot later
+                plot=False,
                 dataset=args.dataset,
                 dirichlet_alpha=args.dirichlet_alpha,
                 batch_size=args.batch_size,
-                local_epochs=args.local_epochs,
-                use_semantic_clustering=args.use_semantic_clustering
+                local_epochs=args.local_epochs
             )
-            # Save confusion matrix for EC-DP-FL (or whichever method)
             conf_matrix = res['metrics']['ecdp_fl']['confusion_matrix']
-            # Use the metrics class to plot and save
             from utils.metrics import ComprehensiveMetrics
             num_classes = 7 if args.dataset == 'skin' else 2
             class_names = (['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc'] 
                            if args.dataset == 'skin' else ['NORMAL', 'PNEUMONIA'])
             metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
-            # Save confusion matrix with epsilon and trial in filename
             fname = f"{conf_mat_dir}/confusion_eps{eps}_trial{trial+1}.png"
             metrics.plot_confusion_matrix(conf_matrix, 
                                           f"EC-DP-FL, ε={eps}, trial {trial+1}",
                                           save_path=fname)
-            # Keep results for aggregation
             trial_results.append(res)
 
-        # Aggregate metrics across trials
         std_acc = [r['federated']['standard']['accuracy'] for r in trial_results]
         dp_acc = [r['federated']['dp']['accuracy'] for r in trial_results]
         ecdp_acc = [r['federated']['ecdp']['accuracy'] for r in trial_results]
@@ -408,7 +336,6 @@ def run_tradeoff(args):
         dp_latency = [r['federated']['dp']['inference_latency'] for r in trial_results]
         ecdp_latency = [r['federated']['ecdp']['inference_latency'] for r in trial_results]
 
-        # Store aggregated results
         all_results[eps] = {
             'Standard FL': {
                 'Accuracy': np.mean(std_acc),
@@ -436,7 +363,6 @@ def run_tradeoff(args):
             }
         }
 
-    # Save CSV
     rows = []
     for eps, data in all_results.items():
         for method in ['Standard FL', 'Basic DP-FL', 'EC-DP-FL']:
@@ -453,7 +379,6 @@ def run_tradeoff(args):
     df = pd.DataFrame(rows)
     df.to_csv(f'results/tradeoff_{args.dataset}.csv', index=False)
 
-    # Plot tradeoff with error bars (using std)
     eps_list = list(all_results.keys())
     std_acc = [all_results[e]['Standard FL']['Accuracy'] for e in eps_list]
     dp_acc = [all_results[e]['Basic DP-FL']['Accuracy'] for e in eps_list]
@@ -501,7 +426,6 @@ def run_ablation(args):
             dirichlet_alpha=args.dirichlet_alpha,
             batch_size=args.batch_size,
             local_epochs=args.local_epochs,
-            use_semantic_clustering=False,
             ablation_use_clipping=use_clip,
             ablation_use_smoothing=use_smooth
         )
@@ -539,8 +463,7 @@ def run_sensitivity(args):
                 dataset=args.dataset,
                 dirichlet_alpha=args.dirichlet_alpha,
                 batch_size=args.batch_size,
-                local_epochs=args.local_epochs,
-                use_semantic_clustering=False
+                local_epochs=args.local_epochs
             )
             results.append({'c': c, 'alpha': alpha, 'accuracy': res['federated']['ecdp']['accuracy']})
     df = pd.DataFrame(results)
@@ -568,9 +491,6 @@ if __name__ == '__main__':
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
     parser.add_argument('--warm_up', type=int, default=0)
-    parser.add_argument('--use_semantic_clustering', action='store_true', default=False)
-    parser.add_argument('--ablation_use_clipping', action='store_true', default=False)
-    parser.add_argument('--ablation_use_smoothing', action='store_true', default=False)
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--mode_per_round', action='store_true', default=True)
     args = parser.parse_args()
@@ -596,8 +516,7 @@ if __name__ == '__main__':
             dataset=args.dataset,
             dirichlet_alpha=args.dirichlet_alpha,
             batch_size=args.batch_size,
-            local_epochs=args.local_epochs,
-            use_semantic_clustering=args.use_semantic_clustering
+            local_epochs=args.local_epochs
         )
     elif args.mode == 'stats':
         run_comparison_with_stats(args)
@@ -630,8 +549,7 @@ if __name__ == '__main__':
                     dataset=args.dataset,
                     dirichlet_alpha=args.dirichlet_alpha,
                     batch_size=args.batch_size,
-                    local_epochs=args.local_epochs,
-                    use_semantic_clustering=args.use_semantic_clustering
+                    local_epochs=args.local_epochs
                 )
                 acc = res['federated']['ecdp']['accuracy']
                 print(f"Accuracy: {acc:.2f}%")
