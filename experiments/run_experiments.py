@@ -40,7 +40,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_dataset_components(dataset_name, num_clients=3, batch_size=32, alpha=None, seed=42):
+def get_dataset_components(dataset_name, num_clients=3, batch_size=64, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
@@ -74,7 +74,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                    num_rounds=20, device='cpu',
                    c=2.5, alpha=0.8, warm_up=0,
                    participation_rate=0.5, seed=42, plot=True,
-                   dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3,
+                   dataset='skin', dirichlet_alpha=None, batch_size=64, local_epochs=3,
                    ablation_use_clipping=True, ablation_use_smoothing=True):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
@@ -486,7 +486,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--participation_rate', type=float, default=0.5)
     parser.add_argument('--dirichlet_alpha', type=float, default=None)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--local_epochs', type=int, default=3)
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
@@ -494,6 +494,11 @@ if __name__ == '__main__':
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--mode_per_round', action='store_true', default=True)
     args = parser.parse_args()
+
+    # CUDA fallback: if user requested GPU but CUDA is not available, fallback to CPU
+    if args.device == 'cuda' and not torch.cuda.is_available():
+        print("⚠️  CUDA requested but not available. Falling back to CPU.")
+        args.device = 'cpu'
 
     if args.device == 'cuda' and torch.cuda.is_available():
         device = torch.device('cuda')
