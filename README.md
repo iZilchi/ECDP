@@ -22,7 +22,7 @@ This repository implements a privacy‑preserving federated learning framework w
 git clone https://github.com/yourusername/ECDP.git
 cd ECDP
 
-2. Create and activate a virtual environment
+### 2. Create and activate a virtual environment
 Windows (PowerShell):
 
 powershell
