@@ -105,7 +105,7 @@ def dirichlet_partition(dataset, num_clients, alpha, seed=42):
     return client_indices
 
 def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/skin_cancer',
-                                alpha=None, seed=42):
+                                alpha=None, seed=42, num_workers=4):
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),
@@ -137,8 +137,8 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/s
             end = start + samples_per_client if i < num_clients - 1 else total_samples
             client_datasets.append(Subset(train_dataset, range(start, end)))
 
-    client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True,num_workers=4) for ds in client_datasets]
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=num_workers) for ds in client_datasets]
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     print(f"✅ Created {num_clients} clients with Dirichlet alpha={alpha if alpha else 'IID'}")
     print(f"📚 Total training samples: {len(train_dataset)}")
