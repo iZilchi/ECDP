@@ -8,7 +8,6 @@ from torchvision import transforms
 from PIL import Image
 
 class HAM10000Dataset(torch.utils.data.Dataset):
-    """Custom dataset for HAM10000 skin cancer images."""
     def __init__(self, csv_file, data_dir, transform=None):
         self.data_frame = pd.read_csv(csv_file)
         self.data_dir = data_dir
@@ -36,12 +35,12 @@ class HAM10000Dataset(torch.utils.data.Dataset):
 
         image_path = self._find_image(img_name_clean, img_name)
         if image_path is None:
-            image = Image.new('RGB', (28, 28), color='gray')
+            image = Image.new('RGB', (224, 224), color='gray')
         else:
             try:
                 image = Image.open(image_path).convert('RGB')
             except:
-                image = Image.new('RGB', (28, 28), color='gray')
+                image = Image.new('RGB', (224, 224), color='gray')
 
         label_str = self.data_frame.iloc[idx]['dx']
         label = self.label_map[label_str]
@@ -80,55 +79,42 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                     return potential2
         return None
 
-
 def dirichlet_partition(dataset, num_clients, alpha, seed=42):
-    """Partition dataset among clients using Dirichlet distribution."""
     np.random.seed(seed)
     targets = np.array([dataset[i][1] for i in range(len(dataset))])
     n_classes = len(np.unique(targets))
-
     class_indices = [np.where(targets == c)[0] for c in range(n_classes)]
     client_indices = [[] for _ in range(num_clients)]
 
     for c in range(n_classes):
         proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
-        # Avoid zero proportions
         proportions = np.maximum(proportions, 1e-6)
         proportions /= proportions.sum()
-
         indices = class_indices[c].copy()
         np.random.shuffle(indices)
-
         sizes = (proportions * len(indices)).astype(int)
         diff = len(indices) - sizes.sum()
         if diff > 0:
             sizes[np.argmax(sizes)] += diff
         elif diff < 0:
             sizes[np.argmin(sizes)] -= diff
-
         start = 0
         for i, size in enumerate(sizes):
             client_indices[i].extend(indices[start:start+size])
             start += size
     return client_indices
 
-
 def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/skin_cancer',
                                 alpha=None, seed=42):
-    """
-    Returns client dataloaders and test loader.
-    - If alpha is None, uses IID sequential split.
-    - If alpha is a float, uses Dirichlet(alpha) non‑IID split.
-    """
     transform = transforms.Compose([
-        transforms.Resize((28, 28)),
+        transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     test_transform = transforms.Compose([
-        transforms.Resize((28, 28)),
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -143,7 +129,6 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/s
         client_indices = dirichlet_partition(train_dataset, num_clients, alpha, seed)
         client_datasets = [Subset(train_dataset, idx) for idx in client_indices]
     else:
-        # IID: sequential split
         total_samples = len(train_dataset)
         samples_per_client = total_samples // num_clients
         client_datasets = []
@@ -160,5 +145,4 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/s
     print(f"🧪 Test samples: {len(test_dataset)}")
     return client_loaders, test_loader
 
-# Alias for backward compatibility
 get_mnist_dataloaders = get_skin_cancer_dataloaders

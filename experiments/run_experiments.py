@@ -4,6 +4,11 @@ import sys
 import os
 import random
 import numpy as np
+import time
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
@@ -11,11 +16,21 @@ from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
-
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import compare_methods_comprehensive
-import matplotlib.pyplot as plt
+
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.labelsize': 14,
+    'axes.titlesize': 16,
+    'xtick.labelsize': 12,
+    'ytick.labelsize': 12,
+    'legend.fontsize': 12,
+    'figure.figsize': (10, 6),
+    'savefig.dpi': 300,
+    'savefig.bbox': 'tight'
+})
 
 def set_seed(seed):
     random.seed(seed)
@@ -33,7 +48,7 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=32, alpha=Non
         model_class = lambda: MediumCNN(num_classes=7)
         num_classes = 7
         class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
-    else:  # chest
+    else:
         client_loaders, test_loader = get_chest_xray_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
         )
@@ -42,11 +57,67 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=32, alpha=Non
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
+def train_centralized(model_class, train_loader, test_loader, device, epochs=20):
+    model = model_class().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+    model.train()
+    start_time = time.time()
+    for epoch in range(epochs):
+        for data, target in train_loader:
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+    total_time = time.time() - start_time
+    acc = test_centralized(model, test_loader, device)
+    param_size = sum(p.numel() for p in model.parameters())
+    # Inference latency
+    model.eval()
+    latencies = []
+    with torch.no_grad():
+        for _ in range(5):
+            data = next(iter(test_loader))[0].to(device)
+            start = time.time()
+            _ = model(data)
+            latencies.append(time.time() - start)
+    inf_latency = np.mean(latencies) * 1000
+    return model, acc, total_time, param_size, inf_latency
+
+def test_centralized(model, test_loader, device):
+    model.eval()
+    correct = total = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            _, pred = torch.max(output, 1)
+            total += target.size(0)
+            correct += (pred == target).sum().item()
+    return 100.0 * correct / total
+
+def measure_inference_latency(model, test_loader, device, num_batches=5):
+    model.eval()
+    latencies = []
+    with torch.no_grad():
+        for i, (data, target) in enumerate(test_loader):
+            if i >= num_batches:
+                break
+            data = data.to(device)
+            start = time.time()
+            _ = model(data)
+            latencies.append(time.time() - start)
+    return np.mean(latencies) * 1000
+
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                    num_rounds=20, device='cpu',
                    c=2.5, alpha=0.8, warm_up=0,
                    participation_rate=0.5, seed=42, plot=True,
-                   dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3):
+                   dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3,
+                   use_semantic_clustering=False,
+                   ablation_use_clipping=True, ablation_use_smoothing=True):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -54,24 +125,35 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}, participation={participation_rate}, alpha_dirichlet={dirichlet_alpha}, batch_size={batch_size}, local_epochs={local_epochs}")
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}, participation={participation_rate}, alpha_dirichlet={dirichlet_alpha}, batch_size={batch_size}, local_epochs={local_epochs}, semantic_clustering={use_semantic_clustering}")
     print('='*60)
 
     set_seed(seed)
 
-    # Load data with Dirichlet and batch size
     client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(
         dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
 
-    # Initialize methods with participation rate
-    std_fl = StandardFL(3, model_class, device, participation_rate=participation_rate)
+    full_train_dataset = torch.utils.data.ConcatDataset([loader.dataset for loader in client_loaders])
+    full_train_loader = torch.utils.data.DataLoader(full_train_dataset, batch_size=batch_size, shuffle=True)
 
+    print("\n--- Training Centralized Baseline ---")
+    central_model, central_acc, central_time, central_param_size, central_latency = train_centralized(
+        model_class, full_train_loader, test_loader, device, epochs=20)
+    print(f"Centralized Accuracy: {central_acc:.2f}%")
+    print(f"Centralized Training Time: {central_time:.2f}s")
+    print(f"Centralized Model Size: {central_param_size:,} params")
+    print(f"Centralized Inference Latency: {central_latency:.2f}ms")
+
+    std_fl = StandardFL(3, model_class, device, participation_rate=participation_rate)
     if per_round_epsilon is not None:
         dp_fl = BasicDPFL(3, model_class, device, participation_rate=participation_rate,
                           epsilon=per_round_epsilon, clip_norm=clip_norm)
         ecdp_fl = ECDPFL(3, model_class, device, participation_rate=participation_rate,
                          epsilon=per_round_epsilon, clip_norm=clip_norm,
-                         c=c, alpha=alpha, warm_up=warm_up)
+                         c=c, alpha=alpha, warm_up=warm_up,
+                         use_clipping=ablation_use_clipping,
+                         use_smoothing=ablation_use_smoothing,
+                         use_semantic_clustering=use_semantic_clustering)
     else:
         dp_fl = BasicDPFL(3, model_class, device, participation_rate=participation_rate,
                           epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
@@ -79,29 +161,90 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
         ecdp_fl = ECDPFL(3, model_class, device, participation_rate=participation_rate,
                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                          clip_norm=clip_norm,
-                         c=c, alpha=alpha, warm_up=warm_up)
+                         c=c, alpha=alpha, warm_up=warm_up,
+                         use_clipping=ablation_use_clipping,
+                         use_smoothing=ablation_use_smoothing,
+                         use_semantic_clustering=use_semantic_clustering)
 
     methods = {'Standard FL': std_fl, 'Basic DP-FL': dp_fl, 'EC-DP-FL': ecdp_fl}
     histories = {}
+    round_times = {}
+    final_accuracies = {}
+    final_model_sizes = {}
+    inference_latencies = {}
 
     for name, method in methods.items():
         print(f"\n--- Training {name} ---")
+        start_time = time.time()
         acc_list = []
         for r in range(num_rounds):
             method.train_round(client_loaders, epochs=local_epochs)
             acc = method.test_accuracy(test_loader)
             acc_list.append(acc)
             print(f"Round {r+1}: {acc:.2f}%")
+        total_time = time.time() - start_time
         histories[name] = acc_list
+        round_times[name] = total_time
+        final_accuracies[name] = acc_list[-1]
+        param_size = sum(p.numel() for p in method.global_model.parameters())
+        final_model_sizes[name] = param_size
+        inference_latencies[name] = measure_inference_latency(method.global_model, test_loader, device)
 
-    # Evaluate comprehensive metrics
+        final_acc = acc_list[-1]
+        threshold = final_acc - 1.0
+        converged_round = num_rounds
+        for i, acc in enumerate(acc_list):
+            if acc >= threshold:
+                converged_round = i + 1
+                break
+        setattr(method, 'convergence_round', converged_round)
+
     metrics = compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device,
                                             num_classes=num_classes, class_names=class_names)
 
+    result = {
+        'centralized': {
+            'accuracy': central_acc,
+            'training_time': central_time,
+            'model_size': central_param_size,
+            'inference_latency': central_latency
+        },
+        'federated': {
+            'standard': {
+                'accuracy': final_accuracies['Standard FL'],
+                'training_time': round_times['Standard FL'],
+                'model_size': final_model_sizes['Standard FL'],
+                'inference_latency': inference_latencies['Standard FL'],
+                'convergence_round': std_fl.convergence_round,
+                'history': histories['Standard FL']
+            },
+            'dp': {
+                'accuracy': final_accuracies['Basic DP-FL'],
+                'training_time': round_times['Basic DP-FL'],
+                'model_size': final_model_sizes['Basic DP-FL'],
+                'inference_latency': inference_latencies['Basic DP-FL'],
+                'convergence_round': dp_fl.convergence_round,
+                'history': histories['Basic DP-FL']
+            },
+            'ecdp': {
+                'accuracy': final_accuracies['EC-DP-FL'],
+                'training_time': round_times['EC-DP-FL'],
+                'model_size': final_model_sizes['EC-DP-FL'],
+                'inference_latency': inference_latencies['EC-DP-FL'],
+                'convergence_round': ecdp_fl.convergence_round,
+                'history': histories['EC-DP-FL']
+            }
+        },
+        'metrics': metrics,
+        'histories': histories,
+        'test_loader': test_loader
+    }
+
     if plot:
-        plt.figure(figsize=(10,6))
+        plt.figure()
         for name, acc in histories.items():
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
+        plt.axhline(y=central_acc, color='g', linestyle='--', label='Centralized')
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
         title = f'Convergence ({mode}={eps}) - {dataset}'
@@ -111,161 +254,332 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_seed{seed}.png', dpi=150)
+        plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_seed{seed}.png')
         plt.show()
+    return result
 
-    return metrics, histories, test_loader
+def run_comparison_with_stats(args):
+    num_runs = args.runs
+    print(f"\nRunning {num_runs} independent runs...")
+    results = []
+    for run in range(num_runs):
+        seed = args.seed + run
+        print(f"\n--- Run {run+1}/{num_runs}, seed={seed} ---")
+        res = run_comparison(
+            per_round_epsilon=args.per_round_epsilon,
+            target_epsilon=args.target_epsilon,
+            clip_norm=args.clip_norm,
+            num_rounds=args.rounds,
+            device=args.device,
+            c=args.c,
+            alpha=args.alpha,
+            warm_up=args.warm_up,
+            participation_rate=args.participation_rate,
+            seed=seed,
+            plot=False,
+            dataset=args.dataset,
+            dirichlet_alpha=args.dirichlet_alpha,
+            batch_size=args.batch_size,
+            local_epochs=args.local_epochs,
+            use_semantic_clustering=args.use_semantic_clustering
+        )
+        results.append(res)
 
-def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
-                           num_rounds=20, device='cpu',
-                           c_values=[1.5, 2.0, 2.5],
-                           alpha_values=[0.6, 0.7, 0.8],
-                           warm_up_values=[0],
-                           participation_rate=0.5,
-                           seed=42, dataset='skin', dirichlet_alpha=None,
-                           batch_size=32, local_epochs=3):
-    best_acc = -1
-    best_params = {}
-    for c in c_values:
-        for alpha in alpha_values:
-            for warm_up in warm_up_values:
-                print(f"\n--- Testing c={c}, α={alpha}, warm_up={warm_up} ---")
-                _, histories, _ = run_comparison(
-                    per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
-                    c, alpha, warm_up, participation_rate, seed=seed, plot=False,
-                    dataset=dataset, dirichlet_alpha=dirichlet_alpha,
-                    batch_size=batch_size, local_epochs=local_epochs)
-                acc = histories['EC-DP-FL'][-1]
-                print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
-                if acc > best_acc:
-                    best_acc = acc
-                    best_params = {'c': c, 'alpha': alpha, 'warm_up': warm_up}
-    print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
-    return best_params
+    std_acc = [r['federated']['standard']['accuracy'] for r in results]
+    dp_acc = [r['federated']['dp']['accuracy'] for r in results]
+    ecdp_acc = [r['federated']['ecdp']['accuracy'] for r in results]
+    std_time = [r['federated']['standard']['training_time'] for r in results]
+    dp_time = [r['federated']['dp']['training_time'] for r in results]
+    ecdp_time = [r['federated']['ecdp']['training_time'] for r in results]
+    std_conv = [r['federated']['standard']['convergence_round'] for r in results]
+    dp_conv = [r['federated']['dp']['convergence_round'] for r in results]
+    ecdp_conv = [r['federated']['ecdp']['convergence_round'] for r in results]
+    central_acc = [r['centralized']['accuracy'] for r in results]
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, num_trials=3,
-                 device='cpu', base_seed=42, mode='per_round',
-                 dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3):
+    def stats_str(arr):
+        return f"{np.mean(arr):.2f} ± {np.std(arr):.2f}"
+
     print("\n" + "="*70)
-    print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε) - {dataset}")
+    print("STATISTICAL SUMMARY (10 runs)")
     print("="*70)
+    print(f"Centralized Accuracy:         {stats_str(central_acc)}%")
+    print(f"Standard FL Accuracy:         {stats_str(std_acc)}%")
+    print(f"Basic DP-FL Accuracy:         {stats_str(dp_acc)}%")
+    print(f"EC-DP-FL Accuracy:            {stats_str(ecdp_acc)}%")
+    print()
+    print(f"Standard FL Training Time:    {stats_str(std_time)}s")
+    print(f"Basic DP-FL Training Time:    {stats_str(dp_time)}s")
+    print(f"EC-DP-FL Training Time:       {stats_str(ecdp_time)}s")
+    print()
+    print(f"Standard FL Convergence Rounds: {stats_str(std_conv)}")
+    print(f"Basic DP-FL Convergence Rounds: {stats_str(dp_conv)}")
+    print(f"EC-DP-FL Convergence Rounds:    {stats_str(ecdp_conv)}")
+    print()
 
-    basic_means, ecdp_means = [], []
-    basic_stds, ecdp_stds = [], []
+    w_stat, p_value = stats.wilcoxon(dp_acc, ecdp_acc)
+    print(f"Wilcoxon test (DP vs EC-DP): W={w_stat:.2f}, p={p_value:.4f}")
+    if p_value < 0.05:
+        print("→ Significant improvement (p < 0.05)")
+
+    ci_low, ci_high = np.percentile(ecdp_acc, [2.5, 97.5])
+    print(f"EC-DP 95% Bootstrap CI: [{ci_low:.2f}, {ci_high:.2f}]")
+
+    df = pd.DataFrame({
+        'Run': range(1, num_runs+1),
+        'Centralized Acc': central_acc,
+        'Standard Acc': std_acc,
+        'DP Acc': dp_acc,
+        'EC-DP Acc': ecdp_acc,
+        'Standard Time': std_time,
+        'DP Time': dp_time,
+        'EC-DP Time': ecdp_time,
+        'Standard Conv': std_conv,
+        'DP Conv': dp_conv,
+        'EC-DP Conv': ecdp_conv
+    })
+    df.to_csv('results/stats_summary.csv', index=False)
+    print("\nResults saved to results/stats_summary.csv")
+
+def run_tradeoff(args):
+    epsilon_values = [0.1, 0.2, 0.5, 1.0, 2.0]
+    num_trials = 10  # hardcoded to 10
+    all_results = {}
+    # Create folder for confusion matrices
+    conf_mat_dir = 'results/confusion_matrices'
+    os.makedirs(conf_mat_dir, exist_ok=True)
 
     for eps in epsilon_values:
-        print(f"\n--- {mode} ε = {eps} ---")
-        basic_accs, ecdp_accs = [], []
+        print(f"\n{'='*60}")
+        print(f"Epsilon = {eps} (running {num_trials} trials)")
+        print('='*60)
+        trial_results = []
         for trial in range(num_trials):
-            seed = base_seed + trial
-            print(f"  Trial {trial+1}/{num_trials} (seed={seed})")
-            set_seed(seed)
-            # Load data with Dirichlet and batch size
-            client_loaders, test_loader, model_class, _, _ = get_dataset_components(
-                dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
+            seed = args.seed + trial
+            print(f"  Trial {trial+1}/{num_trials}, seed={seed}")
+            # Run the comparison (with plot=False to avoid many plots)
+            res = run_comparison(
+                per_round_epsilon=eps if args.mode_per_round else None,
+                target_epsilon=eps if not args.mode_per_round else None,
+                clip_norm=args.clip_norm,
+                num_rounds=args.rounds,
+                device=args.device,
+                c=args.c,
+                alpha=args.alpha,
+                warm_up=args.warm_up,
+                participation_rate=args.participation_rate,
+                seed=seed,
+                plot=False,  # we will create our own plot later
+                dataset=args.dataset,
+                dirichlet_alpha=args.dirichlet_alpha,
+                batch_size=args.batch_size,
+                local_epochs=args.local_epochs,
+                use_semantic_clustering=args.use_semantic_clustering
+            )
+            # Save confusion matrix for EC-DP-FL (or whichever method)
+            conf_matrix = res['metrics']['ecdp_fl']['confusion_matrix']
+            # Use the metrics class to plot and save
+            from utils.metrics import ComprehensiveMetrics
+            num_classes = 7 if args.dataset == 'skin' else 2
+            class_names = (['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc'] 
+                           if args.dataset == 'skin' else ['NORMAL', 'PNEUMONIA'])
+            metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
+            # Save confusion matrix with epsilon and trial in filename
+            fname = f"{conf_mat_dir}/confusion_eps{eps}_trial{trial+1}.png"
+            metrics.plot_confusion_matrix(conf_matrix, 
+                                          f"EC-DP-FL, ε={eps}, trial {trial+1}",
+                                          save_path=fname)
+            # Keep results for aggregation
+            trial_results.append(res)
 
-            # Heuristic correction parameters based on ε
-            if eps <= 0.5:
-                c, alpha, warm_up = 1.5, 0.6, 0
-            else:
-                c, alpha, warm_up = 2.5, 0.8, 0
+        # Aggregate metrics across trials
+        std_acc = [r['federated']['standard']['accuracy'] for r in trial_results]
+        dp_acc = [r['federated']['dp']['accuracy'] for r in trial_results]
+        ecdp_acc = [r['federated']['ecdp']['accuracy'] for r in trial_results]
+        std_time = [r['federated']['standard']['training_time'] for r in trial_results]
+        dp_time = [r['federated']['dp']['training_time'] for r in trial_results]
+        ecdp_time = [r['federated']['ecdp']['training_time'] for r in trial_results]
+        std_conv = [r['federated']['standard']['convergence_round'] for r in trial_results]
+        dp_conv = [r['federated']['dp']['convergence_round'] for r in trial_results]
+        ecdp_conv = [r['federated']['ecdp']['convergence_round'] for r in trial_results]
+        std_model_size = [r['federated']['standard']['model_size'] for r in trial_results]
+        dp_model_size = [r['federated']['dp']['model_size'] for r in trial_results]
+        ecdp_model_size = [r['federated']['ecdp']['model_size'] for r in trial_results]
+        std_latency = [r['federated']['standard']['inference_latency'] for r in trial_results]
+        dp_latency = [r['federated']['dp']['inference_latency'] for r in trial_results]
+        ecdp_latency = [r['federated']['ecdp']['inference_latency'] for r in trial_results]
 
-            if mode == 'per_round':
-                dp = BasicDPFL(3, model_class, device, participation_rate=0.5,
-                               epsilon=eps, clip_norm=clip_norm)
-                ec = ECDPFL(3, model_class, device, participation_rate=0.5,
-                            epsilon=eps, clip_norm=clip_norm,
-                            c=c, alpha=alpha, warm_up=warm_up)
-            else:
-                dp = BasicDPFL(3, model_class, device, participation_rate=0.5,
-                               epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
-                               clip_norm=clip_norm)
-                ec = ECDPFL(3, model_class, device, participation_rate=0.5,
-                            epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
-                            clip_norm=clip_norm,
-                            c=c, alpha=alpha, warm_up=warm_up)
+        # Store aggregated results
+        all_results[eps] = {
+            'Standard FL': {
+                'Accuracy': np.mean(std_acc),
+                'Accuracy_std': np.std(std_acc),
+                'Training Time (s)': np.mean(std_time),
+                'Convergence Rounds': np.mean(std_conv),
+                'Model Size (params)': np.mean(std_model_size),
+                'Inference Latency (ms)': np.mean(std_latency)
+            },
+            'Basic DP-FL': {
+                'Accuracy': np.mean(dp_acc),
+                'Accuracy_std': np.std(dp_acc),
+                'Training Time (s)': np.mean(dp_time),
+                'Convergence Rounds': np.mean(dp_conv),
+                'Model Size (params)': np.mean(dp_model_size),
+                'Inference Latency (ms)': np.mean(dp_latency)
+            },
+            'EC-DP-FL': {
+                'Accuracy': np.mean(ecdp_acc),
+                'Accuracy_std': np.std(ecdp_acc),
+                'Training Time (s)': np.mean(ecdp_time),
+                'Convergence Rounds': np.mean(ecdp_conv),
+                'Model Size (params)': np.mean(ecdp_model_size),
+                'Inference Latency (ms)': np.mean(ecdp_latency)
+            }
+        }
 
-            for r in range(num_rounds):
-                dp.train_round(client_loaders, epochs=local_epochs)
-                ec.train_round(client_loaders, epochs=local_epochs)
+    # Save CSV
+    rows = []
+    for eps, data in all_results.items():
+        for method in ['Standard FL', 'Basic DP-FL', 'EC-DP-FL']:
+            rows.append({
+                'Epsilon': eps,
+                'Method': method,
+                'Accuracy (%)': data[method]['Accuracy'],
+                'Accuracy Std': data[method]['Accuracy_std'],
+                'Training Time (s)': data[method]['Training Time (s)'],
+                'Convergence Rounds': data[method]['Convergence Rounds'],
+                'Model Size': data[method]['Model Size (params)'],
+                'Inference Latency (ms)': data[method]['Inference Latency (ms)']
+            })
+    df = pd.DataFrame(rows)
+    df.to_csv(f'results/tradeoff_{args.dataset}.csv', index=False)
 
-            basic_accs.append(dp.test_accuracy(test_loader))
-            ecdp_accs.append(ec.test_accuracy(test_loader))
+    # Plot tradeoff with error bars (using std)
+    eps_list = list(all_results.keys())
+    std_acc = [all_results[e]['Standard FL']['Accuracy'] for e in eps_list]
+    dp_acc = [all_results[e]['Basic DP-FL']['Accuracy'] for e in eps_list]
+    ecdp_acc = [all_results[e]['EC-DP-FL']['Accuracy'] for e in eps_list]
+    std_std = [all_results[e]['Standard FL']['Accuracy_std'] for e in eps_list]
+    dp_std = [all_results[e]['Basic DP-FL']['Accuracy_std'] for e in eps_list]
+    ecdp_std = [all_results[e]['EC-DP-FL']['Accuracy_std'] for e in eps_list]
 
-        basic_means.append(np.mean(basic_accs))
-        basic_stds.append(np.std(basic_accs))
-        ecdp_means.append(np.mean(ecdp_accs))
-        ecdp_stds.append(np.std(ecdp_accs))
-
-        print(f"  Basic DP: {basic_means[-1]:.2f} ± {basic_stds[-1]:.2f}%")
-        print(f"  EC-DP:    {ecdp_means[-1]:.2f} ± {ecdp_stds[-1]:.2f}%")
-
-    # Plot tradeoff
-    plt.figure(figsize=(10,6))
-    plt.errorbar(epsilon_values, basic_means, yerr=basic_stds, marker='o', label='Basic DP-FL', capsize=5)
-    plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
-    # Standard FL accuracy (run once with same settings)
-    set_seed(base_seed)
-    client_loaders, test_loader, model_class, _, _ = get_dataset_components(
-        dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=base_seed)
-    std_fl = StandardFL(3, model_class, device, participation_rate=0.5)
-    for r in range(num_rounds):
-        std_fl.train_round(client_loaders, epochs=local_epochs)
-    std_acc = std_fl.test_accuracy(test_loader)
-    plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
+    plt.figure()
+    plt.errorbar(eps_list, std_acc, yerr=std_std, marker='o', label='Standard FL', capsize=5)
+    plt.errorbar(eps_list, dp_acc, yerr=dp_std, marker='s', label='Basic DP-FL', capsize=5)
+    plt.errorbar(eps_list, ecdp_acc, yerr=ecdp_std, marker='^', label='EC-DP-FL', capsize=5)
     plt.xscale('log')
-    plt.xlabel(f'Privacy budget ε ({mode})')
+    plt.xlabel('Privacy budget ε')
     plt.ylabel('Accuracy (%)')
-    title = f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}'
-    if dirichlet_alpha is not None:
-        title += f' (Dirichlet α={dirichlet_alpha})'
-    plt.title(title)
+    plt.title(f'Privacy-Utility Tradeoff - {args.dataset} (10 runs each)')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}_{dataset}_{dirichlet_alpha}.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{args.dataset}.png')
+    plt.show()
+
+def run_ablation(args):
+    components = [
+        ('DP only', False, False),
+        ('DP + Clipping', True, False),
+        ('DP + Smoothing', False, True),
+        ('Full ECDP', True, True)
+    ]
+    results = []
+    for name, use_clip, use_smooth in components:
+        print(f"\n--- {name} ---")
+        res = run_comparison(
+            per_round_epsilon=args.per_round_epsilon,
+            target_epsilon=args.target_epsilon,
+            clip_norm=args.clip_norm,
+            num_rounds=args.rounds,
+            device=args.device,
+            c=args.c,
+            alpha=args.alpha,
+            warm_up=args.warm_up,
+            participation_rate=args.participation_rate,
+            seed=args.seed,
+            plot=False,
+            dataset=args.dataset,
+            dirichlet_alpha=args.dirichlet_alpha,
+            batch_size=args.batch_size,
+            local_epochs=args.local_epochs,
+            use_semantic_clustering=False,
+            ablation_use_clipping=use_clip,
+            ablation_use_smoothing=use_smooth
+        )
+        results.append({'name': name, 'accuracy': res['federated']['ecdp']['accuracy']})
+    plt.figure()
+    names = [r['name'] for r in results]
+    accs = [r['accuracy'] for r in results]
+    plt.bar(names, accs, color=['gray', 'lightblue', 'lightgreen', 'blue'])
+    plt.ylabel('Accuracy (%)')
+    plt.title('Ablation Study: Effect of Correction Components')
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig('results/ablation.png')
+    plt.show()
+
+def run_sensitivity(args):
+    c_values = [1.5, 2.0, 2.5]
+    alpha_values = [0.6, 0.7, 0.8]
+    results = []
+    for c in c_values:
+        for alpha in alpha_values:
+            print(f"\nTesting c={c}, α={alpha}")
+            res = run_comparison(
+                per_round_epsilon=args.per_round_epsilon,
+                target_epsilon=args.target_epsilon,
+                clip_norm=args.clip_norm,
+                num_rounds=args.rounds,
+                device=args.device,
+                c=c,
+                alpha=alpha,
+                warm_up=0,
+                participation_rate=args.participation_rate,
+                seed=args.seed,
+                plot=False,
+                dataset=args.dataset,
+                dirichlet_alpha=args.dirichlet_alpha,
+                batch_size=args.batch_size,
+                local_epochs=args.local_epochs,
+                use_semantic_clustering=False
+            )
+            results.append({'c': c, 'alpha': alpha, 'accuracy': res['federated']['ecdp']['accuracy']})
+    df = pd.DataFrame(results)
+    pivot = df.pivot(index='c', columns='alpha', values='accuracy')
+    plt.figure(figsize=(8,6))
+    sns.heatmap(pivot, annot=True, fmt='.2f', cmap='viridis')
+    plt.title('Sensitivity: EC-DP Accuracy vs c and α')
+    plt.savefig('results/sensitivity_heatmap.png')
     plt.show()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune'], default='comparison')
-    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin',
-                        help='Choose dataset: skin (HAM10000) or chest (pneumonia)')
-    # Privacy budget: either per-round or total
-    parser.add_argument('--per_round_epsilon', type=float, default=None,
-                        help='Per‑round privacy budget (if using per‑round interpretation)')
-    parser.add_argument('--target_epsilon', type=float, default=None,
-                        help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=2.3,
-                        help='Clipping norm (suggested from analyze_gradients.py)')
-    parser.add_argument('--rounds', type=int, default=20,
-                        help='Number of federation rounds')
+    parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune', 'stats', 'ablation', 'sensitivity'], default='comparison')
+    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin')
+    parser.add_argument('--per_round_epsilon', type=float, default=None)
+    parser.add_argument('--target_epsilon', type=float, default=None)
+    parser.add_argument('--clip_norm', type=float, default=2.3)
+    parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--device', default='cpu')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    # New parameters
-    parser.add_argument('--participation_rate', type=float, default=0.5,
-                        help='Fraction of clients participating each round')
-    parser.add_argument('--dirichlet_alpha', type=float, default=None,
-                        help='Dirichlet concentration parameter for non‑IID split (e.g., 0.1, 0.5). None = IID.')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Batch size for local training and testing')
-    parser.add_argument('--local_epochs', type=int, default=3,
-                        help='Number of local training epochs per round')
-    # Correction parameters (used if mode=comparison)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--participation_rate', type=float, default=0.5)
+    parser.add_argument('--dirichlet_alpha', type=float, default=None)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--local_epochs', type=int, default=3)
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
-    parser.add_argument('--warm_up', type=int, default=0, help='Warm‑up rounds before applying correction (0 = none)')
+    parser.add_argument('--warm_up', type=int, default=0)
+    parser.add_argument('--use_semantic_clustering', action='store_true', default=False)
+    parser.add_argument('--ablation_use_clipping', action='store_true', default=False)
+    parser.add_argument('--ablation_use_smoothing', action='store_true', default=False)
+    parser.add_argument('--runs', type=int, default=10)
+    parser.add_argument('--mode_per_round', action='store_true', default=True)
     args = parser.parse_args()
 
     if args.device == 'cuda' and torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
-
-    # Ensure exactly one of per_round_epsilon or target_epsilon is set for comparison/tune
-    if args.mode in ['comparison', 'tune']:
-        assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
-            "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
+    args.device = device
 
     if args.mode == 'comparison':
         run_comparison(
@@ -282,34 +596,46 @@ if __name__ == '__main__':
             dataset=args.dataset,
             dirichlet_alpha=args.dirichlet_alpha,
             batch_size=args.batch_size,
-            local_epochs=args.local_epochs
+            local_epochs=args.local_epochs,
+            use_semantic_clustering=args.use_semantic_clustering
         )
+    elif args.mode == 'stats':
+        run_comparison_with_stats(args)
     elif args.mode == 'tradeoff':
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0]
-        run_tradeoff(
-            epsilon_list,
-            args.clip_norm,
-            args.rounds,
-            num_trials=3,
-            device=device,
-            base_seed=args.seed,
-            mode='per_round',
-            dataset=args.dataset,
-            dirichlet_alpha=args.dirichlet_alpha,
-            batch_size=args.batch_size,
-            local_epochs=args.local_epochs
-        )
+        run_tradeoff(args)
+    elif args.mode == 'ablation':
+        run_ablation(args)
+    elif args.mode == 'sensitivity':
+        run_sensitivity(args)
     elif args.mode == 'tune':
-        tune_correction_params(
-            per_round_epsilon=args.per_round_epsilon,
-            target_epsilon=args.target_epsilon,
-            clip_norm=args.clip_norm,
-            num_rounds=args.rounds,
-            device=device,
-            participation_rate=args.participation_rate,
-            seed=args.seed,
-            dataset=args.dataset,
-            dirichlet_alpha=args.dirichlet_alpha,
-            batch_size=args.batch_size,
-            local_epochs=args.local_epochs
-        )
+        c_values = [1.5, 2.0, 2.5]
+        alpha_values = [0.6, 0.7, 0.8]
+        best_acc = -1
+        best_params = {}
+        for c in c_values:
+            for alpha in alpha_values:
+                print(f"\n--- Testing c={c}, α={alpha} ---")
+                res = run_comparison(
+                    per_round_epsilon=args.per_round_epsilon,
+                    target_epsilon=args.target_epsilon,
+                    clip_norm=args.clip_norm,
+                    num_rounds=args.rounds,
+                    device=device,
+                    c=c,
+                    alpha=alpha,
+                    warm_up=0,
+                    participation_rate=args.participation_rate,
+                    seed=args.seed,
+                    plot=False,
+                    dataset=args.dataset,
+                    dirichlet_alpha=args.dirichlet_alpha,
+                    batch_size=args.batch_size,
+                    local_epochs=args.local_epochs,
+                    use_semantic_clustering=args.use_semantic_clustering
+                )
+                acc = res['federated']['ecdp']['accuracy']
+                print(f"Accuracy: {acc:.2f}%")
+                if acc > best_acc:
+                    best_acc = acc
+                    best_params = {'c': c, 'alpha': alpha}
+        print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")

@@ -2,17 +2,12 @@ import os
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms, datasets
-from .data_loader import dirichlet_partition   # reuse Dirichlet function
+from .data_loader import dirichlet_partition
 
 def get_chest_xray_dataloaders(num_clients=3, batch_size=32,
                                data_root='./data/chest_xray',
                                combine_val_test=True,
                                alpha=None, seed=42):
-    """
-    Returns client loaders and test loader for Chest X‑Ray dataset.
-    - If alpha is None: IID sequential split.
-    - If alpha is a float: Dirichlet(alpha) non‑IID split.
-    """
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),
@@ -40,7 +35,6 @@ def get_chest_xray_dataloaders(num_clients=3, batch_size=32,
     if combine_val_test:
         test_dataset = torch.utils.data.ConcatDataset([val_dataset, test_dataset])
 
-    # Partition training set
     if alpha is not None:
         client_indices = dirichlet_partition(full_train_dataset, num_clients, alpha, seed)
         client_datasets = [Subset(full_train_dataset, idx) for idx in client_indices]

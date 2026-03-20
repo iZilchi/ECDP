@@ -4,10 +4,6 @@ import time
 import random
 
 class FederatedLearningBase:
-    """
-    Base federated learning framework.
-    Implements FedAvg on model updates.
-    """
     def __init__(self, num_clients, model_class, device, participation_rate=1.0):
         self.num_clients = num_clients
         self.model_class = model_class
@@ -19,7 +15,6 @@ class FederatedLearningBase:
 
     def train_round(self, client_loaders, epochs=3):
         start_time = time.time()
-        # Select participating clients (random subset)
         n_participants = max(1, int(self.num_clients * self.participation_rate))
         participating_indices = random.sample(range(self.num_clients), n_participants)
         participating_loaders = [client_loaders[i] for i in participating_indices]
@@ -41,7 +36,6 @@ class FederatedLearningBase:
         return aggregated_update
 
     def _train_client_get_update(self, global_weights, dataloader, epochs):
-        """Default: train locally and return raw update."""
         model = self.model_class().to(self.device)
         model.load_state_dict(global_weights)
         model.train()
@@ -62,7 +56,6 @@ class FederatedLearningBase:
         return update
 
     def _aggregate_updates(self, client_updates):
-        """Average the updates (FedAvg)."""
         avg_update = {}
         for key in client_updates[0].keys():
             stacked = torch.stack([up[key].float() for up in client_updates])
