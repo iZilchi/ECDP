@@ -7,12 +7,10 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-# ========== NEW: conditional imports ==========
 from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
-# ==============================================
 
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
@@ -27,27 +25,28 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# ========== NEW: function to get loader and model based on dataset ==========
-def get_dataset_components(dataset_name, num_clients=10, batch_size=64):
+def get_dataset_components(dataset_name, num_clients=3, batch_size=32, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
-            num_clients=num_clients, batch_size=batch_size
+            num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
         )
         model_class = lambda: MediumCNN(num_classes=7)
         num_classes = 7
         class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
     else:  # chest
         client_loaders, test_loader = get_chest_xray_dataloaders(
-            num_clients=num_clients, batch_size=batch_size
+            num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
         )
         model_class = lambda: ChestXRayCNN(num_classes=2)
         num_classes = 2
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
-# ============================================================================
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
-                   c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True, dataset='skin'):
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
+                   num_rounds=20, device='cpu',
+                   c=2.5, alpha=0.8, warm_up=0,
+                   participation_rate=0.5, seed=42, plot=True,
+                   dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -55,30 +54,29 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}")
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}, dataset={dataset}, participation={participation_rate}, alpha_dirichlet={dirichlet_alpha}, batch_size={batch_size}, local_epochs={local_epochs}")
     print('='*60)
 
     set_seed(seed)
 
-    # ========== NEW: get dataset components ==========
-    client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(dataset)
-    # ================================================
+    # Load data with Dirichlet and batch size
+    client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(
+        dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
 
-    std_fl = StandardFL(3, model_class, device)
-    
+    # Initialize methods with participation rate
+    std_fl = StandardFL(3, model_class, device, participation_rate=participation_rate)
+
     if per_round_epsilon is not None:
-        dp_fl = BasicDPFL(3, model_class, device,
-                          epsilon=per_round_epsilon,
-                          clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, model_class, device,
-                         epsilon=per_round_epsilon,
-                         clip_norm=clip_norm,
+        dp_fl = BasicDPFL(3, model_class, device, participation_rate=participation_rate,
+                          epsilon=per_round_epsilon, clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, model_class, device, participation_rate=participation_rate,
+                         epsilon=per_round_epsilon, clip_norm=clip_norm,
                          c=c, alpha=alpha, warm_up=warm_up)
     else:
-        dp_fl = BasicDPFL(3, model_class, device,
+        dp_fl = BasicDPFL(3, model_class, device, participation_rate=participation_rate,
                           epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                           clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, model_class, device,
+        ecdp_fl = ECDPFL(3, model_class, device, participation_rate=participation_rate,
                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                          clip_norm=clip_norm,
                          c=c, alpha=alpha, warm_up=warm_up)
@@ -90,16 +88,15 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         print(f"\n--- Training {name} ---")
         acc_list = []
         for r in range(num_rounds):
-            method.train_round(client_loaders, epochs=2)
+            method.train_round(client_loaders, epochs=local_epochs)
             acc = method.test_accuracy(test_loader)
             acc_list.append(acc)
             print(f"Round {r+1}: {acc:.2f}%")
         histories[name] = acc_list
 
-    # ========== NEW: pass num_classes and class_names to metrics ==========
+    # Evaluate comprehensive metrics
     metrics = compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device,
                                             num_classes=num_classes, class_names=class_names)
-    # ======================================================================
 
     if plot:
         plt.figure(figsize=(10,6))
@@ -107,7 +104,10 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
-        plt.title(f'Convergence ({mode}={eps}) - {dataset}')
+        title = f'Convergence ({mode}={eps}) - {dataset}'
+        if dirichlet_alpha is not None:
+            title += f' (Dirichlet α={dirichlet_alpha})'
+        plt.title(title)
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
@@ -116,19 +116,25 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     return metrics, histories, test_loader
 
-def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
+def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
+                           num_rounds=20, device='cpu',
                            c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8],
-                           warm_up_values=[0, 3],
-                           seed=42, dataset='skin'):
+                           warm_up_values=[0],
+                           participation_rate=0.5,
+                           seed=42, dataset='skin', dirichlet_alpha=None,
+                           batch_size=32, local_epochs=3):
     best_acc = -1
     best_params = {}
     for c in c_values:
         for alpha in alpha_values:
             for warm_up in warm_up_values:
                 print(f"\n--- Testing c={c}, α={alpha}, warm_up={warm_up} ---")
-                _, histories, _ = run_comparison(per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
-                                                  c, alpha, warm_up, seed=seed, plot=False, dataset=dataset)
+                _, histories, _ = run_comparison(
+                    per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
+                    c, alpha, warm_up, participation_rate, seed=seed, plot=False,
+                    dataset=dataset, dirichlet_alpha=dirichlet_alpha,
+                    batch_size=batch_size, local_epochs=local_epochs)
                 acc = histories['EC-DP-FL'][-1]
                 print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
                 if acc > best_acc:
@@ -137,7 +143,9 @@ def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_nor
     print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
     return best_params
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42, mode='per_round', dataset='skin'):
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, num_trials=3,
+                 device='cpu', base_seed=42, mode='per_round',
+                 dataset='skin', dirichlet_alpha=None, batch_size=32, local_epochs=3):
     print("\n" + "="*70)
     print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε) - {dataset}")
     print("="*70)
@@ -152,36 +160,34 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
             seed = base_seed + trial
             print(f"  Trial {trial+1}/{num_trials} (seed={seed})")
             set_seed(seed)
-            # ========== NEW: get dataset components ==========
-            client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(dataset)
-            # ================================================
+            # Load data with Dirichlet and batch size
+            client_loaders, test_loader, model_class, _, _ = get_dataset_components(
+                dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
 
-            # Heuristic correction parameters
+            # Heuristic correction parameters based on ε
             if eps <= 0.5:
-                c, alpha, warm_up = 1.5, 0.6, 3
+                c, alpha, warm_up = 1.5, 0.6, 0
             else:
                 c, alpha, warm_up = 2.5, 0.8, 0
 
             if mode == 'per_round':
-                dp = BasicDPFL(3, model_class, device,
-                               epsilon=eps,
-                               clip_norm=clip_norm)
-                ec = ECDPFL(3, model_class, device,
-                            epsilon=eps,
-                            clip_norm=clip_norm,
+                dp = BasicDPFL(3, model_class, device, participation_rate=0.5,
+                               epsilon=eps, clip_norm=clip_norm)
+                ec = ECDPFL(3, model_class, device, participation_rate=0.5,
+                            epsilon=eps, clip_norm=clip_norm,
                             c=c, alpha=alpha, warm_up=warm_up)
             else:
-                dp = BasicDPFL(3, model_class, device,
+                dp = BasicDPFL(3, model_class, device, participation_rate=0.5,
                                epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
                                clip_norm=clip_norm)
-                ec = ECDPFL(3, model_class, device,
+                ec = ECDPFL(3, model_class, device, participation_rate=0.5,
                             epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
                             clip_norm=clip_norm,
                             c=c, alpha=alpha, warm_up=warm_up)
 
             for r in range(num_rounds):
-                dp.train_round(client_loaders, epochs=2)
-                ec.train_round(client_loaders, epochs=2)
+                dp.train_round(client_loaders, epochs=local_epochs)
+                ec.train_round(client_loaders, epochs=local_epochs)
 
             basic_accs.append(dp.test_accuracy(test_loader))
             ecdp_accs.append(ec.test_accuracy(test_loader))
@@ -198,22 +204,26 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
     plt.figure(figsize=(10,6))
     plt.errorbar(epsilon_values, basic_means, yerr=basic_stds, marker='o', label='Basic DP-FL', capsize=5)
     plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
-    # Standard FL accuracy (run once)
+    # Standard FL accuracy (run once with same settings)
     set_seed(base_seed)
-    client_loaders, test_loader, model_class, _, _ = get_dataset_components(dataset)
-    std_fl = StandardFL(3, model_class, device)
+    client_loaders, test_loader, model_class, _, _ = get_dataset_components(
+        dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=base_seed)
+    std_fl = StandardFL(3, model_class, device, participation_rate=0.5)
     for r in range(num_rounds):
-        std_fl.train_round(client_loaders, epochs=2)
+        std_fl.train_round(client_loaders, epochs=local_epochs)
     std_acc = std_fl.test_accuracy(test_loader)
     plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
     plt.xscale('log')
     plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
-    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}')
+    title = f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}'
+    if dirichlet_alpha is not None:
+        title += f' (Dirichlet α={dirichlet_alpha})'
+    plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}_{dataset}.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{mode}_{dataset}_{dirichlet_alpha}.png', dpi=150)
     plt.show()
 
 if __name__ == '__main__':
@@ -232,10 +242,19 @@ if __name__ == '__main__':
                         help='Number of federation rounds')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    # New parameters
+    parser.add_argument('--participation_rate', type=float, default=0.5,
+                        help='Fraction of clients participating each round')
+    parser.add_argument('--dirichlet_alpha', type=float, default=None,
+                        help='Dirichlet concentration parameter for non‑IID split (e.g., 0.1, 0.5). None = IID.')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for local training and testing')
+    parser.add_argument('--local_epochs', type=int, default=3,
+                        help='Number of local training epochs per round')
     # Correction parameters (used if mode=comparison)
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
-    parser.add_argument('--warm_up', type=int, default=5)
+    parser.add_argument('--warm_up', type=int, default=0, help='Warm‑up rounds before applying correction (0 = none)')
     args = parser.parse_args()
 
     if args.device == 'cuda' and torch.cuda.is_available():
@@ -249,12 +268,48 @@ if __name__ == '__main__':
             "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
 
     if args.mode == 'comparison':
-        run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                       args.c, args.alpha, args.warm_up, seed=args.seed, dataset=args.dataset)
+        run_comparison(
+            per_round_epsilon=args.per_round_epsilon,
+            target_epsilon=args.target_epsilon,
+            clip_norm=args.clip_norm,
+            num_rounds=args.rounds,
+            device=device,
+            c=args.c,
+            alpha=args.alpha,
+            warm_up=args.warm_up,
+            participation_rate=args.participation_rate,
+            seed=args.seed,
+            dataset=args.dataset,
+            dirichlet_alpha=args.dirichlet_alpha,
+            batch_size=args.batch_size,
+            local_epochs=args.local_epochs
+        )
     elif args.mode == 'tradeoff':
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
-        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3,
-                     device=device, base_seed=args.seed, mode='per_round', dataset=args.dataset)
+        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0]
+        run_tradeoff(
+            epsilon_list,
+            args.clip_norm,
+            args.rounds,
+            num_trials=3,
+            device=device,
+            base_seed=args.seed,
+            mode='per_round',
+            dataset=args.dataset,
+            dirichlet_alpha=args.dirichlet_alpha,
+            batch_size=args.batch_size,
+            local_epochs=args.local_epochs
+        )
     elif args.mode == 'tune':
-        tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                               seed=args.seed, dataset=args.dataset)
+        tune_correction_params(
+            per_round_epsilon=args.per_round_epsilon,
+            target_epsilon=args.target_epsilon,
+            clip_norm=args.clip_norm,
+            num_rounds=args.rounds,
+            device=device,
+            participation_rate=args.participation_rate,
+            seed=args.seed,
+            dataset=args.dataset,
+            dirichlet_alpha=args.dirichlet_alpha,
+            batch_size=args.batch_size,
+            local_epochs=args.local_epochs
+        )

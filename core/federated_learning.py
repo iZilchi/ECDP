@@ -1,26 +1,32 @@
 import torch
 import copy
 import time
+import random
 
 class FederatedLearningBase:
     """
     Base federated learning framework.
     Implements FedAvg on model updates.
     """
-    def __init__(self, num_clients, model_class, device):
+    def __init__(self, num_clients, model_class, device, participation_rate=1.0):
         self.num_clients = num_clients
         self.model_class = model_class
         self.device = device
+        self.participation_rate = participation_rate
         self.global_model = model_class().to(device)
         self.accuracy_history = []
         self.round_times = []
 
-    def train_round(self, client_loaders, epochs=2):
+    def train_round(self, client_loaders, epochs=3):
         start_time = time.time()
-        global_weights = copy.deepcopy(self.global_model.state_dict())
+        # Select participating clients (random subset)
+        n_participants = max(1, int(self.num_clients * self.participation_rate))
+        participating_indices = random.sample(range(self.num_clients), n_participants)
+        participating_loaders = [client_loaders[i] for i in participating_indices]
 
+        global_weights = copy.deepcopy(self.global_model.state_dict())
         client_updates = []
-        for loader in client_loaders:
+        for loader in participating_loaders:
             update = self._train_client_get_update(global_weights, loader, epochs)
             client_updates.append(update)
 

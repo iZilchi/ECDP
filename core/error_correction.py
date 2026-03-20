@@ -11,10 +11,9 @@ class ErrorCorrection:
         self.std_running = {}
         self.counter = 0  # rounds seen
 
-    def apply(self, noisy_update, alpha, c, warm_up_rounds=5):
+    def apply(self, noisy_update, alpha, c, warm_up_rounds=0):
         """
-        Apply correction after warm-up.
-        - warm_up_rounds: number of initial rounds to skip correction.
+        Apply correction after warm-up rounds.
         """
         corrected = {}
         for key, tensor in noisy_update.items():
@@ -38,7 +37,6 @@ class ErrorCorrection:
 
             # Apply adaptive smoothing (Eq. 8)
             if self.counter < warm_up_rounds:
-                # No correction during warm-up
                 corrected[key] = tensor
             else:
                 corrected[key] = alpha * clipped + (1 - alpha) * tensor

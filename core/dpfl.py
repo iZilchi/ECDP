@@ -10,10 +10,10 @@ class BasicDPFL(FederatedLearningBase):
     Differentially Private Federated Learning with correct noise addition.
     Supports either per‑round epsilon or total target epsilon.
     """
-    def __init__(self, num_clients, model_class, device,
+    def __init__(self, num_clients, model_class, device, participation_rate=1.0,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100):
-        super().__init__(num_clients, model_class, device)
+        super().__init__(num_clients, model_class, device, participation_rate)
         # Exactly one of epsilon or target_epsilon must be provided
         assert (epsilon is not None) or (target_epsilon is not None), \
             "Either epsilon or target_epsilon must be provided"
@@ -21,7 +21,6 @@ class BasicDPFL(FederatedLearningBase):
         self.epsilon_target = target_epsilon  # total epsilon over max_rounds
         self.delta = delta
         self.clip_norm = clip_norm
-        self.num_clients = num_clients
         self.max_rounds = max_rounds
         self.accountant = RDPAccountant(delta)
         self.noise_scale = None
@@ -62,11 +61,11 @@ class ECDPFL(BasicDPFL):
     """
     Error‑Corrected Differentially Private Federated Learning.
     """
-    def __init__(self, num_clients, model_class, device,
+    def __init__(self, num_clients, model_class, device, participation_rate=1.0,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
-                 c=2.5, alpha=0.8, warm_up=5, correction_momentum=0.9):
-        super().__init__(num_clients, model_class, device,
+                 c=2.5, alpha=0.8, warm_up=0, correction_momentum=0.9):
+        super().__init__(num_clients, model_class, device, participation_rate,
                          epsilon, delta, clip_norm,
                          target_epsilon, max_rounds)
         self.c = c

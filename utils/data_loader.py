@@ -1,10 +1,11 @@
-from torchvision import transforms
-from torch.utils.data import DataLoader, Subset
-import pandas as pd
-from PIL import Image
 import os
-import torch
 import json
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Subset
+from torchvision import transforms
+from PIL import Image
 
 class HAM10000Dataset(torch.utils.data.Dataset):
     """Custom dataset for HAM10000 skin cancer images."""
@@ -79,7 +80,46 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                     return potential2
         return None
 
-def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/skin_cancer'):
+
+def dirichlet_partition(dataset, num_clients, alpha, seed=42):
+    """Partition dataset among clients using Dirichlet distribution."""
+    np.random.seed(seed)
+    targets = np.array([dataset[i][1] for i in range(len(dataset))])
+    n_classes = len(np.unique(targets))
+
+    class_indices = [np.where(targets == c)[0] for c in range(n_classes)]
+    client_indices = [[] for _ in range(num_clients)]
+
+    for c in range(n_classes):
+        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+        # Avoid zero proportions
+        proportions = np.maximum(proportions, 1e-6)
+        proportions /= proportions.sum()
+
+        indices = class_indices[c].copy()
+        np.random.shuffle(indices)
+
+        sizes = (proportions * len(indices)).astype(int)
+        diff = len(indices) - sizes.sum()
+        if diff > 0:
+            sizes[np.argmax(sizes)] += diff
+        elif diff < 0:
+            sizes[np.argmin(sizes)] -= diff
+
+        start = 0
+        for i, size in enumerate(sizes):
+            client_indices[i].extend(indices[start:start+size])
+            start += size
+    return client_indices
+
+
+def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/skin_cancer',
+                                alpha=None, seed=42):
+    """
+    Returns client dataloaders and test loader.
+    - If alpha is None, uses IID sequential split.
+    - If alpha is a float, uses Dirichlet(alpha) non‑IID split.
+    """
     transform = transforms.Compose([
         transforms.Resize((28, 28)),
         transforms.RandomHorizontalFlip(),
@@ -99,21 +139,25 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/s
     train_dataset = HAM10000Dataset(train_csv, data_dir, transform=transform)
     test_dataset = HAM10000Dataset(test_csv, data_dir, transform=test_transform)
 
-    total_samples = len(train_dataset)
-    samples_per_client = total_samples // num_clients
-    client_datasets = []
-    for i in range(num_clients):
-        start = i * samples_per_client
-        end = start + samples_per_client if i < num_clients - 1 else total_samples
-        client_datasets.append(Subset(train_dataset, range(start, end)))
+    if alpha is not None:
+        client_indices = dirichlet_partition(train_dataset, num_clients, alpha, seed)
+        client_datasets = [Subset(train_dataset, idx) for idx in client_indices]
+    else:
+        # IID: sequential split
+        total_samples = len(train_dataset)
+        samples_per_client = total_samples // num_clients
+        client_datasets = []
+        for i in range(num_clients):
+            start = i * samples_per_client
+            end = start + samples_per_client if i < num_clients - 1 else total_samples
+            client_datasets.append(Subset(train_dataset, range(start, end)))
 
     client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True) for ds in client_datasets]
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    print(f"✅ Created {num_clients} clients with ~{samples_per_client} samples each")
-    print(f"📚 Total training samples: {total_samples}")
-    print(f"🧪 Test samples: {len(test_dataset)}\n")
-
+    print(f"✅ Created {num_clients} clients with Dirichlet alpha={alpha if alpha else 'IID'}")
+    print(f"📚 Total training samples: {len(train_dataset)}")
+    print(f"🧪 Test samples: {len(test_dataset)}")
     return client_loaders, test_loader
 
 # Alias for backward compatibility
