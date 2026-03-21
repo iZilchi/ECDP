@@ -45,7 +45,7 @@ def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, 
     return client_loaders, test_loader, model_class, num_classes, class_names
 
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
-                   device='cpu', c=2.5, alpha_corr=0.8, seed=42, plot=True, dataset='skin', alpha_data=None):
+                   device='cpu', c=1.5, alpha_corr=0.6, seed=42, plot=True, dataset='skin', alpha_data=None):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -206,8 +206,8 @@ if __name__ == '__main__':
     parser.add_argument('--device', default=None,
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--c', type=float, default=2.5, help='Correction bound parameter (for comparison mode)')
-    parser.add_argument('--alpha_corr', type=float, default=0.8, help='Smoothing coefficient (for comparison mode)')
+    parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
+    parser.add_argument('--alpha_corr', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
     parser.add_argument('--alpha_data', type=float, default=None,
                         help='Dirichlet concentration parameter for non-IID data. If None, IID. Typically 0.1, 0.5, 1.0.')
     args = parser.parse_args()

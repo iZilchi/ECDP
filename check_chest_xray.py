@@ -10,5 +10,5 @@ def check_chest_xray(data_root='./data/chest_xray/chest_xray'):
         else:
             print(f"{split}: folder not found at {path}")
 
-if name == 'main':
+if __name__ == '__main__':
     check_chest_xray()
