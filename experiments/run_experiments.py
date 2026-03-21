@@ -223,8 +223,10 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
     class DPOnly(BasicDPFL):
         def _train_client_get_update(self, global_weights, dataloader, epochs):
             return super()._train_client_get_update(global_weights, dataloader, epochs)
+
     class DPClip(BasicDPFL):
-        pass
+        pass   # uses default clipping
+
     class DPEVC(BasicDPFL):
         def _aggregate_updates(self, client_updates):
             avg_update = super()._aggregate_updates(client_updates)
@@ -233,6 +235,7 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
             corrected = ec.apply(avg_update, alpha=1.0, c=c, warm_up_rounds=0,
                                  use_clipping=True, use_smoothing=False)
             return corrected
+
     class DPAGS(BasicDPFL):
         def _aggregate_updates(self, client_updates):
             avg_update = super()._aggregate_updates(client_updates)

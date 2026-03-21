@@ -16,7 +16,7 @@ from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
 
-def get_model_constructor(dataset, use_tiny=False):
+def get_model_constructor(dataset):
     """Return model class for the dataset."""
     if dataset == 'skin_cancer':
         return MediumCNN
@@ -46,14 +46,14 @@ def get_dataloaders(dataset, num_clients, batch_size, alpha, seed):
         raise ValueError(f"Unknown dataset: {dataset}")
 
 def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches=40,
-                         batch_size=64, alpha=None, seed=42, use_tiny=False):
+                         batch_size=32, alpha=None, seed=42):
     """Analyze gradient norms for a given dataset."""
     print("="*70)
-    print(f"🔬 UPDATE NORM ANALYSIS FOR {dataset.upper()} ({'TinyCNN' if use_tiny else 'Default CNN'})")
+    print(f"🔬 UPDATE NORM ANALYSIS FOR {dataset.upper()}")
     print("="*70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_constructor = get_model_constructor(dataset, use_tiny)
+    model_constructor = get_model_constructor(dataset)
     client_loaders, _ = get_dataloaders(dataset, num_clients, batch_size, alpha, seed)
 
     update_norms = []
@@ -111,7 +111,7 @@ def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches
     print(f"Moderate     (75th %ile): clip_norm ≈ {p75:.1f}")
     print(f"Aggressive   (95th %ile): clip_norm ≈ {p95:.1f}")
 
-    candidates = [0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 15.0, 20.0]
+    candidates = [0.5, 1.0, 1.5, 2.0, 3.5, 5.0, 10.0, 15.0, 20.0]
     closest_candidate = min(candidates, key=lambda x: abs(x - p75))
     print(f"\n🎯 SUGGESTED clip_norm (from candidates {candidates}):")
     print(f"   clip_norm = {closest_candidate}")
@@ -143,8 +143,6 @@ if __name__ == "__main__":
                         help='Use IID data distribution (default: Non-IID α=0.5)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
-    parser.add_argument('--use_tiny', action='store_true',
-                        help='Use TinyCNN instead of dataset-specific model (for quick tests)')
     args = parser.parse_args()
 
     alpha = None if args.iid else 0.5
@@ -155,7 +153,6 @@ if __name__ == "__main__":
         batches=args.batches,
         batch_size=args.batch_size,
         alpha=alpha,
-        seed=args.seed,
-        use_tiny=args.use_tiny
+        seed=args.seed
     )
     print(f"\n💾 Recommended clip_norm for {args.dataset} = {stats['suggested']}")
