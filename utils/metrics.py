@@ -16,9 +16,9 @@ import seaborn as sns
 class ComprehensiveMetrics:
     """All performance metrics from Objectives 2.1"""
     
-def __init__(self, num_classes=7, class_names=None):
-    self.num_classes = num_classes
-    self.class_names = class_names or ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
+    def __init__(self, num_classes=7, class_names=None):
+        self.num_classes = num_classes
+        self.class_names = class_names or ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
     
     def compute_all_metrics(self, model, test_loader, device):
         """
@@ -146,11 +146,10 @@ def __init__(self, num_classes=7, class_names=None):
         }
 
 def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device, num_classes=7, class_names=None):
-    metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
     """
     Comprehensive comparison matching Objectives 2.1 and 2.2
     """
-    metrics = ComprehensiveMetrics()
+    metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
     
     print("\n🔬 COMPUTING COMPREHENSIVE METRICS FOR ALL METHODS...")
     
@@ -177,19 +176,20 @@ def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device, n
     print(f"{'='*60}\n")
     
     # Generate confusion matrices
-    fig1 = metrics.plot_confusion_matrix(
+    os.makedirs('results', exist_ok=True)
+    metrics.plot_confusion_matrix(
         std_metrics['confusion_matrix'],
         "Standard FL",
         "results/confusion_matrix_std_fl.png"
     )
     
-    fig2 = metrics.plot_confusion_matrix(
+    metrics.plot_confusion_matrix(
         dp_metrics['confusion_matrix'],
         "Basic DP-FL",
         "results/confusion_matrix_dp_fl.png"
     )
     
-    fig3 = metrics.plot_confusion_matrix(
+    metrics.plot_confusion_matrix(
         ecdp_metrics['confusion_matrix'],
         "EC-DP-FL (Ours)",
         "results/confusion_matrix_ecdp_fl.png"
