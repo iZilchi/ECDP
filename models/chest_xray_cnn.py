@@ -2,8 +2,8 @@ import torch.nn as nn
 
 class ChestXRayCNN(nn.Module):
     """Simple CNN for chest X‑ray images (224×224, 2 classes)."""
-    def init(self, num_classes=2):
-        super().init()
+    def __init__(self, num_classes=2):
+        super().__init__()
         self.features = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, padding=1),
             nn.ReLU(),

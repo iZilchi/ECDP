@@ -1,13 +1,42 @@
 import os
 import torch
+import numpy as np
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms, datasets
+
+def dirichlet_partition(dataset, num_clients, alpha, seed=42):
+    """Partition dataset using Dirichlet distribution for non-IID splits."""
+    np.random.seed(seed)
+    targets = np.array([dataset[i][1] for i in range(len(dataset))])
+    n_classes = len(np.unique(targets))
+    class_indices = [np.where(targets == c)[0] for c in range(n_classes)]
+    client_indices = [[] for _ in range(num_clients)]
+
+    for c in range(n_classes):
+        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+        proportions = np.maximum(proportions, 1e-6)
+        proportions /= proportions.sum()
+        indices = class_indices[c].copy()
+        np.random.shuffle(indices)
+        sizes = (proportions * len(indices)).astype(int)
+        diff = len(indices) - sizes.sum()
+        if diff > 0:
+            sizes[np.argmax(sizes)] += diff
+        elif diff < 0:
+            sizes[np.argmin(sizes)] -= diff
+        start = 0
+        for i, size in enumerate(sizes):
+            client_indices[i].extend(indices[start:start+size])
+            start += size
+    return client_indices
 
 def get_chest_xray_dataloaders(
     num_clients=10,
     batch_size=64,
     data_root='./data/chest_xray',
-    combine_val_test=True   # combine val and test into one test set
+    combine_val_test=True,   # combine val and test into one test set
+    alpha=None,              # if None, IID; if float, Dirichlet non-IID with given alpha
+    seed=42
 ):
     """
     Returns client loaders (for training) and a test loader.
@@ -50,18 +79,24 @@ def get_chest_xray_dataloaders(
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Split the training set into client subsets
-    total_samples = len(full_train_dataset)
-    samples_per_client = total_samples // num_clients
-    client_datasets = []
-    for i in range(num_clients):
-        start = i * samples_per_client
-        end = start + samples_per_client if i < num_clients - 1 else total_samples
-        client_datasets.append(Subset(full_train_dataset, range(start, end)))
+    # Partition the training set into clients
+    if alpha is not None:
+        # Non-IID partitioning
+        client_indices = dirichlet_partition(full_train_dataset, num_clients, alpha, seed)
+        client_datasets = [Subset(full_train_dataset, idx) for idx in client_indices]
+    else:
+        # IID: uniform split
+        total_samples = len(full_train_dataset)
+        samples_per_client = total_samples // num_clients
+        client_datasets = []
+        for i in range(num_clients):
+            start = i * samples_per_client
+            end = start + samples_per_client if i < num_clients - 1 else total_samples
+            client_datasets.append(Subset(full_train_dataset, range(start, end)))
 
     client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True) for ds in client_datasets]
 
-    print(f"✅ Created {num_clients} clients with ~{samples_per_client} samples each")
-    print(f"📚 Total training samples: {total_samples}")
+    print(f"✅ Created {num_clients} clients with Dirichlet alpha={alpha if alpha else 'IID'}")
+    print(f"📚 Total training samples: {len(full_train_dataset)}")
     print(f"🧪 Test samples (val+test): {len(test_dataset)}")
     return client_loaders, test_loader

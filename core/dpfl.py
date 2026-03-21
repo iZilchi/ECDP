@@ -13,9 +13,9 @@ class BasicDPFL(FederatedLearningBase):
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
-                 participation_rate=0.5):   # <-- added participation_rate
+                 participation_rate=0.5):
         super().__init__(num_clients, model_class, device,
-                         participation_rate=participation_rate)   # <-- pass to base
+                         participation_rate=participation_rate)
         assert (epsilon is not None) or (target_epsilon is not None), \
             "Either epsilon or target_epsilon must be provided"
         self.epsilon = epsilon                # per‑round epsilon
@@ -66,21 +66,19 @@ class ECDPFL(BasicDPFL):
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
-                 c=2.5, alpha=0.8, warm_up=5, correction_momentum=0.9,
-                 participation_rate=0.5):   # <-- added participation_rate
+                 c=2.5, alpha=0.8, correction_momentum=0.9,
+                 participation_rate=0.5):
         super().__init__(num_clients, model_class, device,
                          epsilon, delta, clip_norm,
                          target_epsilon, max_rounds,
-                         participation_rate=participation_rate)   # <-- pass to base
+                         participation_rate=participation_rate)
         self.c = c
         self.alpha = alpha
-        self.warm_up = warm_up
         self.error_correction = ErrorCorrection(momentum=correction_momentum)
 
     def _aggregate_updates(self, client_updates):
         noisy_avg = super()._aggregate_updates(client_updates)
         corrected_avg = self.error_correction.apply(noisy_avg,
-                                                     alpha=self.alpha,
-                                                     c=self.c,
-                                                     warm_up_rounds=self.warm_up)
+                                                    alpha=self.alpha,
+                                                    c=self.c)
         return corrected_avg
