@@ -27,7 +27,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, alpha=None, seed=42):
+def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
@@ -44,8 +44,8 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, a
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
-                   device='cpu', c=1.5, alpha_corr=0.6, seed=42, plot=True, dataset='skin', alpha_data=None):
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
+                   device='cpu', c=2.5, alpha_corr=0.8, seed=42, plot=True, dataset='skin', alpha_data=None):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -189,7 +189,7 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     plt.savefig(f'results/tradeoff_{mode}_{dataset}_alpha{alpha_data}.png', dpi=150)
     plt.show()
 
-def run_tune(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
+def run_tune(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
              device='cpu', seed=42, dataset='skin', alpha_data=None,
              c_values=[1.5, 2.0, 2.5], alpha_corr_values=[0.6, 0.7, 0.8]):
     """
@@ -216,10 +216,6 @@ def run_tune(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rou
         for alpha_corr in alpha_corr_values:
             print(f"\n--- Testing c={c}, α={alpha_corr} ---")
             # Run comparison with plot=False to avoid showing plots
-            # We need to call run_comparison but we want just the final EC-DP-FL accuracy.
-            # We'll capture the histories and extract the last accuracy.
-            # To avoid printing all rounds, we could set print=False, but let's keep prints minimal.
-            # We'll call run_comparison with plot=False and suppress prints? We'll just let it print.
             _, histories, _ = run_comparison(
                 per_round_epsilon, target_epsilon, clip_norm, num_rounds,
                 device, c, alpha_corr, seed=seed, plot=False,
@@ -252,7 +248,7 @@ if __name__ == '__main__':
                         help='Per‑round privacy budget (if using per‑round interpretation)')
     parser.add_argument('--target_epsilon', type=float, default=None,
                         help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=3.5,
+    parser.add_argument('--clip_norm', type=float, default=2.3,
                         help='Clipping norm (suggested from analyze_gradients.py)')
     parser.add_argument('--rounds', type=int, default=20,
                         help='Number of federation rounds')
@@ -260,8 +256,8 @@ if __name__ == '__main__':
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     # Correction parameters (used in comparison and tune)
-    parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
-    parser.add_argument('--alpha_corr', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
+    parser.add_argument('--c', type=float, default=2.5, help='Correction bound parameter (for comparison mode)')
+    parser.add_argument('--alpha_corr', type=float, default=0.8, help='Smoothing coefficient (for comparison mode)')
     # Data heterogeneity
     parser.add_argument('--alpha_data', type=float, default=None,
                         help='Dirichlet concentration parameter for non-IID data. If None, IID.')
