@@ -17,7 +17,7 @@ from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import compare_methods_comprehensive
 import matplotlib.pyplot as plt
 
-BATCH_SIZE = 32   # default batch size
+BATCH_SIZE = 32
 
 def set_seed(seed):
     random.seed(seed)
@@ -27,7 +27,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, alpha=None, seed=42):
+def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
@@ -44,7 +44,7 @@ def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, 
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
                    device='cpu', c=1.5, alpha_corr=0.6, seed=42, plot=True, dataset='skin', alpha_data=None):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
@@ -189,9 +189,62 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     plt.savefig(f'results/tradeoff_{mode}_{dataset}_alpha{alpha_data}.png', dpi=150)
     plt.show()
 
+def run_tune(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
+             device='cpu', seed=42, dataset='skin', alpha_data=None,
+             c_values=[1.5, 2.0, 2.5], alpha_corr_values=[0.6, 0.7, 0.8]):
+    """
+    Grid search over c and alpha_corr values. For each combination,
+    runs a full comparison (without plotting) and records final EC-DP-FL accuracy.
+    """
+    if per_round_epsilon is not None:
+        mode = "per‑round ε"
+        eps = per_round_epsilon
+    else:
+        mode = "total ε"
+        eps = target_epsilon
+    print("\n" + "="*70)
+    print(f"TUNING CORRECTION PARAMETERS ({mode}={eps})")
+    print(f"c_values = {c_values}")
+    print(f"alpha_corr_values = {alpha_corr_values}")
+    print("="*70)
+
+    best_acc = -1
+    best_params = None
+    results = []
+
+    for c in c_values:
+        for alpha_corr in alpha_corr_values:
+            print(f"\n--- Testing c={c}, α={alpha_corr} ---")
+            # Run comparison with plot=False to avoid showing plots
+            # We need to call run_comparison but we want just the final EC-DP-FL accuracy.
+            # We'll capture the histories and extract the last accuracy.
+            # To avoid printing all rounds, we could set print=False, but let's keep prints minimal.
+            # We'll call run_comparison with plot=False and suppress prints? We'll just let it print.
+            _, histories, _ = run_comparison(
+                per_round_epsilon, target_epsilon, clip_norm, num_rounds,
+                device, c, alpha_corr, seed=seed, plot=False,
+                dataset=dataset, alpha_data=alpha_data
+            )
+            acc = histories['EC-DP-FL'][-1]
+            results.append((c, alpha_corr, acc))
+            print(f"  Final EC-DP-FL accuracy: {acc:.2f}%")
+            if acc > best_acc:
+                best_acc = acc
+                best_params = {'c': c, 'alpha': alpha_corr}
+
+    print("\n" + "="*70)
+    print("TUNING RESULTS")
+    print("="*70)
+    for c, alpha_corr, acc in results:
+        print(f"c={c}, α={alpha_corr}: {acc:.2f}%")
+    print(f"\nBest params: c={best_params['c']}, α={best_params['alpha']} with accuracy {best_acc:.2f}%")
+    print("="*70)
+
+    return best_params
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['comparison', 'tradeoff'], default='comparison')
+    parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune'], default='comparison')
     parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin',
                         help='Choose dataset: skin (HAM10000) or chest (pneumonia)')
     # Privacy budget: either per-round or total
@@ -199,17 +252,25 @@ if __name__ == '__main__':
                         help='Per‑round privacy budget (if using per‑round interpretation)')
     parser.add_argument('--target_epsilon', type=float, default=None,
                         help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=2.3,
+    parser.add_argument('--clip_norm', type=float, default=3.5,
                         help='Clipping norm (suggested from analyze_gradients.py)')
     parser.add_argument('--rounds', type=int, default=20,
                         help='Number of federation rounds')
     parser.add_argument('--device', default=None,
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    # Correction parameters (used in comparison and tune)
     parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
     parser.add_argument('--alpha_corr', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
+    # Data heterogeneity
     parser.add_argument('--alpha_data', type=float, default=None,
-                        help='Dirichlet concentration parameter for non-IID data. If None, IID. Typically 0.1, 0.5, 1.0.')
+                        help='Dirichlet concentration parameter for non-IID data. If None, IID.')
+    # Tuning-specific arguments
+    parser.add_argument('--c_values', nargs='+', type=float, default=[1.5, 2.0, 2.5],
+                        help='List of c values to try during tuning')
+    parser.add_argument('--alpha_corr_values', nargs='+', type=float, default=[0.6, 0.7, 0.8],
+                        help='List of alpha values to try during tuning')
+
     args = parser.parse_args()
 
     # Device auto-detection
@@ -232,3 +293,9 @@ if __name__ == '__main__':
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds,
                      device=device, base_seed=args.seed, mode='per_round',
                      dataset=args.dataset, alpha_data=args.alpha_data)
+    elif args.mode == 'tune':
+        assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
+            "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
+        run_tune(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
+                 seed=args.seed, dataset=args.dataset, alpha_data=args.alpha_data,
+                 c_values=args.c_values, alpha_corr_values=args.alpha_corr_values)
