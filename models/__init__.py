@@ -1,1 +1,1 @@
-from models.medium_cnn import MediumCNN
+from models.tiny_cnn import TinyCNN

@@ -1,7 +1,6 @@
 """
 Analyze model update norms after local training.
 This helps calibrate the clipping norm (C) for differential privacy.
-Now uses the MediumCNN model.
 """
 import sys
 import os
@@ -10,11 +9,11 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import torch
 import numpy as np
 from utils.data_loader import get_skin_cancer_dataloaders
-from models.medium_cnn import MediumCNN
+from models.tiny_cnn import TinyCNN
 
 def analyze_update_norms(num_clients=3, epochs=2, batches=40):
     print("="*70)
-    print("🔬 UPDATE NORM ANALYSIS FOR HAM10000 (MediumCNN)")
+    print("🔬 UPDATE NORM ANALYSIS FOR HAM10000 (TinyCNN)")
     print("="*70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,7 +23,7 @@ def analyze_update_norms(num_clients=3, epochs=2, batches=40):
 
     for client_idx, loader in enumerate(client_loaders):
         print(f"\n📊 Client {client_idx+1}")
-        model = MediumCNN().to(device)
+        model = TinyCNN().to(device)
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
