@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import os
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,7 +8,11 @@ import seaborn as sns
 class ComprehensiveMetrics:
     def __init__(self, num_classes=7, class_names=None):
         self.num_classes = num_classes
-        self.class_names = class_names or ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
+        if class_names is None:
+            # Default for skin cancer
+            self.class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
+        else:
+            self.class_names = class_names
 
     def compute_all_metrics(self, model, test_loader, device):
         model.eval()
@@ -81,8 +86,11 @@ class ComprehensiveMetrics:
             'ecdp_utility_loss': std_metrics['accuracy'] - ecdp_metrics['accuracy']
         }
 
-def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device, num_classes=7, class_names=None):
+def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device,
+                                  num_classes=7, class_names=None):
+    """Wrapper that computes and prints all metrics, returns results."""
     metrics = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
+
     print("\n🔬 COMPUTING COMPREHENSIVE METRICS FOR ALL METHODS...")
     std_metrics = metrics.compute_all_metrics(std_fl.global_model, test_loader, device)
     dp_metrics = metrics.compute_all_metrics(dp_fl.global_model, test_loader, device)

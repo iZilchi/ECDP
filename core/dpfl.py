@@ -12,9 +12,10 @@ class BasicDPFL(FederatedLearningBase):
     """
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
-                 target_epsilon=None, max_rounds=100):
-        super().__init__(num_clients, model_class, device)
-        # Exactly one of epsilon or target_epsilon must be provided
+                 target_epsilon=None, max_rounds=100,
+                 participation_rate=0.5):   # <-- added participation_rate
+        super().__init__(num_clients, model_class, device,
+                         participation_rate=participation_rate)   # <-- pass to base
         assert (epsilon is not None) or (target_epsilon is not None), \
             "Either epsilon or target_epsilon must be provided"
         self.epsilon = epsilon                # per‑round epsilon
@@ -65,10 +66,12 @@ class ECDPFL(BasicDPFL):
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
-                 c=2.5, alpha=0.8, warm_up=5, correction_momentum=0.9):
+                 c=2.5, alpha=0.8, warm_up=5, correction_momentum=0.9,
+                 participation_rate=0.5):   # <-- added participation_rate
         super().__init__(num_clients, model_class, device,
                          epsilon, delta, clip_norm,
-                         target_epsilon, max_rounds)
+                         target_epsilon, max_rounds,
+                         participation_rate=participation_rate)   # <-- pass to base
         self.c = c
         self.alpha = alpha
         self.warm_up = warm_up
