@@ -22,8 +22,8 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
-                   c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True):
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20, device='cpu',
+                   c=1.5, alpha=0.6, warm_up=0, seed=42, plot=True):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -87,7 +87,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     return metrics, histories, test_loader
 
-def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
+def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20, device='cpu',
                            c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8],
                            warm_up_values=[0, 3],
@@ -194,16 +194,16 @@ if __name__ == '__main__':
                         help='Per‑round privacy budget (if using per‑round interpretation)')
     parser.add_argument('--target_epsilon', type=float, default=None,
                         help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=2.3,
+    parser.add_argument('--clip_norm', type=float, default=3.5,
                         help='Clipping norm (suggested from analyze_gradients.py)')
     parser.add_argument('--rounds', type=int, default=20,
                         help='Number of federation rounds')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     # Correction parameters (used if mode=comparison)
-    parser.add_argument('--c', type=float, default=2.5)
-    parser.add_argument('--alpha', type=float, default=0.8)
-    parser.add_argument('--warm_up', type=int, default=5)
+    parser.add_argument('--c', type=float, default=1.5)
+    parser.add_argument('--alpha', type=float, default=0.6)
+    parser.add_argument('--warm_up', type=int, default=0)
     args = parser.parse_args()
 
     if args.device == 'cuda' and torch.cuda.is_available():
@@ -223,7 +223,7 @@ if __name__ == '__main__':
         # For tradeoff, we need to know which interpretation. Default to per_round.
         # You can add a --tradeoff_mode argument if desired.
         print("Tradeoff mode uses per‑round epsilon by default. Modify code if total epsilon needed.")
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3,
                      device=device, base_seed=args.seed, mode='per_round')
     elif args.mode == 'tune':
