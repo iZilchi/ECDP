@@ -72,7 +72,7 @@ def run_single_comparison(dataset, num_clients, participation_rate, alpha_dirich
     set_seed(seed)
 
     client_loaders, test_loader = get_dataloaders(
-        dataset, num_clients=num_clients, batch_size=32,
+        dataset, num_clients=num_clients, batch_size=64,
         alpha=alpha_dirichlet, seed=seed
     )
     num_classes, class_names = get_class_info(dataset)
@@ -118,7 +118,7 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
                    per_round_epsilon=None, target_epsilon=None,
                    clip_norm=3.5, num_rounds=20, device='cpu',
                    c=1.5, alpha_smooth=0.6, warm_up=0,
-                   trials=3, plot=True):
+                   trials=1, plot=True):
     """Run multiple trials and compute statistics."""
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
@@ -136,7 +136,6 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
     print('='*60)
 
     results = {'standard_fl': [], 'dp_fl': [], 'ecdp_fl': []}
-    # We'll collect the metric dicts from each trial
     trial_metrics = []
 
     for trial in range(trials):
@@ -149,7 +148,6 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
             c, alpha_smooth, warm_up, seed
         )
         trial_metrics.append(metrics)
-        # Store accuracy for later plotting
         results['standard_fl'].append(metrics['standard_fl']['accuracy'])
         results['dp_fl'].append(metrics['dp_fl']['accuracy'])
         results['ecdp_fl'].append(metrics['ecdp_fl']['accuracy'])
@@ -165,35 +163,35 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
         print(f"{name:12s}: {mean_acc:.2f} ± {std_acc:.2f}%")
 
     # Wilcoxon signed-rank test between DP-FL and EC-DP-FL
-    stat, p_val = wilcoxon(results['dp_fl'], results['ecdp_fl'], alternative='greater')
-    print(f"\nWilcoxon signed-rank test (DP-FL vs EC-DP-FL):")
-    print(f"  Statistic = {stat:.3f}, p-value = {p_val:.4f}")
-    if p_val < 0.05:
-        print("  ✅ EC-DP-FL significantly outperforms DP-FL (p < 0.05)")
-    else:
-        print("  ❌ No significant difference (p >= 0.05)")
+    if trials > 1:
+        stat, p_val = wilcoxon(results['dp_fl'], results['ecdp_fl'], alternative='greater')
+        print(f"\nWilcoxon signed-rank test (DP-FL vs EC-DP-FL):")
+        print(f"  Statistic = {stat:.3f}, p-value = {p_val:.4f}")
+        if p_val < 0.05:
+            print("  ✅ EC-DP-FL significantly outperforms DP-FL (p < 0.05)")
+        else:
+            print("  ❌ No significant difference (p >= 0.05)")
 
-    # Compute 95% confidence intervals via bootstrap
-    n_bootstrap = 1000
-    ci_low, ci_high = [], []
-    for name in ['standard_fl', 'dp_fl', 'ecdp_fl']:
-        bootstrap_means = []
-        for _ in range(n_bootstrap):
-            resampled = np.random.choice(results[name], size=len(results[name]), replace=True)
-            bootstrap_means.append(np.mean(resampled))
-        ci_low.append(np.percentile(bootstrap_means, 2.5))
-        ci_high.append(np.percentile(bootstrap_means, 97.5))
-    print(f"\n95% Confidence Intervals (bootstrap):")
-    print(f"  Standard FL: [{ci_low[0]:.2f}, {ci_high[0]:.2f}]")
-    print(f"  Basic DP-FL: [{ci_low[1]:.2f}, {ci_high[1]:.2f}]")
-    print(f"  EC-DP-FL:    [{ci_low[2]:.2f}, {ci_high[2]:.2f}]")
+        # Compute 95% confidence intervals via bootstrap
+        n_bootstrap = 1000
+        ci_low, ci_high = [], []
+        for name in ['standard_fl', 'dp_fl', 'ecdp_fl']:
+            bootstrap_means = []
+            for _ in range(n_bootstrap):
+                resampled = np.random.choice(results[name], size=len(results[name]), replace=True)
+                bootstrap_means.append(np.mean(resampled))
+            ci_low.append(np.percentile(bootstrap_means, 2.5))
+            ci_high.append(np.percentile(bootstrap_means, 97.5))
+        print(f"\n95% Confidence Intervals (bootstrap):")
+        print(f"  Standard FL: [{ci_low[0]:.2f}, {ci_high[0]:.2f}]")
+        print(f"  Basic DP-FL: [{ci_low[1]:.2f}, {ci_high[1]:.2f}]")
+        print(f"  EC-DP-FL:    [{ci_low[2]:.2f}, {ci_high[2]:.2f}]")
+    else:
+        print("\n⚠️ Only one trial – no statistical tests performed.")
 
     # Plot if requested
-    if plot:
+    if plot and trials > 1:
         plt.figure(figsize=(10,6))
-        # We only have final accuracies per trial, not per round, so we can plot bars or nothing.
-        # For convergence, we could save per-round history but for simplicity we skip.
-        # Instead, we just show a boxplot of final accuracies.
         data_to_plot = [results['standard_fl'], results['dp_fl'], results['ecdp_fl']]
         plt.boxplot(data_to_plot, labels=['Standard FL', 'DP-FL', 'EC-DP-FL'])
         plt.ylabel('Accuracy (%)')
@@ -203,7 +201,7 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
         plt.savefig(f'results/final_acc_{dataset}_{mode}_{eps}_seed{42}.png', dpi=150)
         plt.show()
 
-    # Also return the aggregated metrics for potential further use
+    # Return the aggregated metrics for potential further use
     return trial_metrics
 
 def tune_correction_params(dataset, num_clients, participation_rate, alpha_dirichlet,
@@ -212,7 +210,7 @@ def tune_correction_params(dataset, num_clients, participation_rate, alpha_diric
                            c_values=[1.5, 2.0, 2.5],
                            alpha_smooth_values=[0.6, 0.7, 0.8],
                            warm_up_values=[0, 3],
-                           trials=3):
+                           trials=1):
     """Grid search over correction parameters, averaging over multiple trials."""
     best_acc = -1
     best_params = {}
@@ -244,8 +242,8 @@ def tune_clip_norm(dataset, num_clients, participation_rate, alpha_dirichlet,
                    per_round_epsilon=None, target_epsilon=None,
                    num_rounds=20, device='cpu',
                    c=1.5, alpha_smooth=0.6, warm_up=0,
-                   clip_norm_values=[0.5, 1.0, 1.5, 2.0, 2.5],
-                   trials=3):
+                   clip_norm_values=[0.5, 1.0, 1.5, 2.0, 2.5, 5.0, 10.0, 15.0, 20.0],
+                   trials=1):
     """Grid search over clipping norm values."""
     best_acc = -1
     best_norm = None
@@ -275,7 +273,7 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
                    per_round_epsilon=None, target_epsilon=None,
                    clip_norm=3.5, num_rounds=20, device='cpu',
                    c=1.5, alpha_smooth=0.6, warm_up=0,
-                   trials=3):
+                   trials=1):
     """
     Run ablation: DP only, DP+clip, DP+EVC, DP+AGS, full ECDP-FL.
     We use BasicDPFL with modifications to control components.
@@ -296,7 +294,7 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
             seed = 42 + trial
             set_seed(seed)
             client_loaders, test_loader = get_dataloaders(
-                dataset, num_clients=num_clients, batch_size=32,
+                dataset, num_clients=num_clients, batch_size=64,
                 alpha=alpha_dirichlet, seed=seed
             )
             num_classes, class_names = get_class_info(dataset)
@@ -385,8 +383,8 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
     return results
 
 def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
-                 epsilon_values, clip_norm, num_rounds=10,
-                 num_trials=3, device='cpu', base_seed=42, mode='per_round'):
+                 epsilon_values, clip_norm, num_rounds=20,
+                 num_trials=1, device='cpu', base_seed=42, mode='per_round'):
     """Existing tradeoff function, but now with trials per epsilon."""
     print("\n" + "="*70)
     print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε) on {dataset}")
@@ -409,7 +407,7 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
             set_seed(seed)
 
             client_loaders, test_loader = get_dataloaders(
-                dataset, num_clients=num_clients, batch_size=32,
+                dataset, num_clients=num_clients, batch_size=64,
                 alpha=alpha_dirichlet, seed=seed
             )
 
@@ -461,7 +459,7 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
     # Standard FL accuracy (single run)
     set_seed(base_seed)
     client_loaders, test_loader = get_dataloaders(
-        dataset, num_clients=num_clients, batch_size=32,
+        dataset, num_clients=num_clients, batch_size=64,
         alpha=alpha_dirichlet, seed=base_seed
     )
     std_fl = StandardFL(num_clients, model_constructor, device,

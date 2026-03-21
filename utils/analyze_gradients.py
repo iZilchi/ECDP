@@ -111,13 +111,12 @@ def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches
     print(f"Moderate     (75th %ile): clip_norm ≈ {p75:.1f}")
     print(f"Aggressive   (95th %ile): clip_norm ≈ {p95:.1f}")
 
-    # Select the closest value from the predefined candidate set
-    candidates = [0.5, 1.0, 1.5, 2.0]
+    candidates = [0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 15.0, 20.0]
     closest_candidate = min(candidates, key=lambda x: abs(x - p75))
     print(f"\n🎯 SUGGESTED clip_norm (from candidates {candidates}):")
     print(f"   clip_norm = {closest_candidate}")
     print(f"   (Based on 75th percentile, which clips ~25% of updates)")
-
+    
     return {
         'mean': update_norms.mean(),
         'median': np.median(update_norms),
