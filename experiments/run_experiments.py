@@ -27,7 +27,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, alpha=None, seed=42):
+def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
@@ -44,8 +44,8 @@ def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, 
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
-                   device='cpu', c=2.5, alpha=0.8, seed=42, plot=True, dataset='skin'):
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
+                   device='cpu', c=1.5, alpha=0.6, seed=42, plot=True, dataset='skin'):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -192,15 +192,15 @@ if __name__ == '__main__':
                         help='Per‑round privacy budget (if using per‑round interpretation)')
     parser.add_argument('--target_epsilon', type=float, default=None,
                         help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=2.3,
+    parser.add_argument('--clip_norm', type=float, default=3.5,
                         help='Clipping norm (suggested from analyze_gradients.py)')
     parser.add_argument('--rounds', type=int, default=20,
                         help='Number of federation rounds')
     parser.add_argument('--device', default=None,
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--c', type=float, default=2.5, help='Correction bound parameter (for comparison mode)')
-    parser.add_argument('--alpha', type=float, default=0.8, help='Smoothing coefficient (for comparison mode)')
+    parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
+    parser.add_argument('--alpha', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
     args = parser.parse_args()
 
     # Device auto-detection
