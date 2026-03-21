@@ -7,12 +7,24 @@ from utils.privacy_accountant import RDPAccountant
 
 class BasicDPFL(FederatedLearningBase):
 <<<<<<< HEAD
+<<<<<<< HEAD
     def __init__(self, num_clients, model_class, device, participation_rate=1.0,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100):
         super().__init__(num_clients, model_class, device, participation_rate)
         assert (epsilon is not None) or (target_epsilon is not None), \
             "Either epsilon or target_epsilon must be provided"
+=======
+    """
+    Differentially Private Federated Learning with correct noise addition.
+    Includes RDP accounting.
+    """
+    def __init__(self, num_clients, model_class, device,
+                 epsilon, delta=1e-5, clip_norm=1.0,
+                 target_epsilon=None, max_rounds=100):
+        super().__init__(num_clients, model_class, device)
+        self.dp = DifferentialPrivacy(epsilon, delta, clip_norm)
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
     """
     Differentially Private Federated Learning with correct noise addition.
@@ -32,10 +44,15 @@ class BasicDPFL(FederatedLearningBase):
         self.accountant = RDPAccountant(delta)
         self.noise_scale = None
 <<<<<<< HEAD
+<<<<<<< HEAD
         self.dp = DifferentialPrivacy(epsilon=1.0, delta=delta, clip_norm=clip_norm)
 
     def _compute_noise_scale(self):
         sensitivity = self.clip_norm / self.num_clients
+=======
+
+    def _compute_noise_scale(self):
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
 
     def _compute_noise_scale(self):
@@ -46,8 +63,12 @@ class BasicDPFL(FederatedLearningBase):
             return sigma
         else:
 <<<<<<< HEAD
+<<<<<<< HEAD
             sigma = sensitivity * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
             return sigma
+=======
+            return self.clip_norm * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
             return self.clip_norm * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
@@ -62,6 +83,10 @@ class BasicDPFL(FederatedLearningBase):
         if self.noise_scale is None:
             self.noise_scale = self._compute_noise_scale()
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+        # Account for this round
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
         # Account for this round
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
@@ -84,6 +109,9 @@ class ECDPFL(BasicDPFL):
     """
     def __init__(self, num_clients, model_class, device,
                  epsilon, delta=1e-5, clip_norm=1.0,
+<<<<<<< HEAD
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
                  target_epsilon=None, max_rounds=100,
                  c=2.5, alpha=0.8, warm_up=0, correction_momentum=0.9,

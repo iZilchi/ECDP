@@ -14,9 +14,13 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
 <<<<<<< HEAD
+<<<<<<< HEAD
 from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
+=======
+from models.tiny_cnn import TinyCNN
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
 from models.tiny_cnn import TinyCNN
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
@@ -46,6 +50,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 def get_dataset_components(dataset_name, num_clients=3, batch_size=64, alpha=None, seed=42):
     if dataset_name == 'skin':
@@ -97,6 +102,12 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
     print(f"\n{'='*60}")
     print(f"COMPARISON: ε={epsilon}, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
+def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
+                   c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True):
+    print(f"\n{'='*60}")
+    print(f"COMPARISON: ε={epsilon}, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     print('='*60)
 
     set_seed(seed)  # <-- set seed before creating loaders
@@ -104,6 +115,7 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
     client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(
         dataset, num_clients=3, batch_size=batch_size, alpha=dirichlet_alpha, seed=seed)
 
+<<<<<<< HEAD
 <<<<<<< HEAD
     # No centralized training – removed
 
@@ -127,10 +139,15 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
                          use_clipping=ablation_use_clipping,
                          use_smoothing=ablation_use_smoothing)
 =======
+=======
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     std_fl = StandardFL(3, TinyCNN, device)
     dp_fl = BasicDPFL(3, TinyCNN, device, epsilon, clip_norm=clip_norm)
     ecdp_fl = ECDPFL(3, TinyCNN, device, epsilon, clip_norm=clip_norm,
                      c=c, alpha=alpha, warm_up=warm_up)
+<<<<<<< HEAD
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 
     methods = {'Standard FL': std_fl, 'Basic DP-FL': dp_fl, 'EC-DP-FL': ecdp_fl}
@@ -208,6 +225,7 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
 <<<<<<< HEAD
+<<<<<<< HEAD
         title = f'Convergence ({mode}={eps}) - {dataset}'
         if dirichlet_alpha is not None:
             title += f' (Dirichlet α={dirichlet_alpha})'
@@ -216,6 +234,13 @@ def run_comparison(epsilon, clip_norm, num_rounds=10, device='cpu',
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
         plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_seed{seed}.png')
+=======
+        plt.title(f'Convergence (ε={epsilon}, C={clip_norm}, c={c}, α={alpha})')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        os.makedirs('results', exist_ok=True)
+        plt.savefig(f'results/convergence_eps{epsilon}_seed{seed}.png', dpi=150)
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 =======
         plt.title(f'Convergence (ε={epsilon}, C={clip_norm}, c={c}, α={alpha})')
         plt.legend()
@@ -253,6 +278,7 @@ def run_comparison_with_stats(args):
         results.append(res)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     std_acc = [r['federated']['standard']['accuracy'] for r in results]
     dp_acc = [r['federated']['dp']['accuracy'] for r in results]
     ecdp_acc = [r['federated']['ecdp']['accuracy'] for r in results]
@@ -269,6 +295,8 @@ def run_comparison_with_stats(args):
     print("\n" + "="*70)
     print("STATISTICAL SUMMARY (10 runs)")
 =======
+=======
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
 def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
                            c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8],
@@ -296,6 +324,9 @@ def tune_correction_params(epsilon, clip_norm, num_rounds=10, device='cpu',
 def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42):
     print("\n" + "="*70)
     print("PRIVACY‑UTILITY TRADEOFF ANALYSIS")
+<<<<<<< HEAD
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     print("="*70)
     print(f"Standard FL Accuracy:         {stats_str(std_acc)}%")
@@ -311,6 +342,7 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device=
     print(f"EC-DP-FL Convergence Rounds:    {stats_str(ecdp_conv)}")
     print()
 
+<<<<<<< HEAD
 <<<<<<< HEAD
     w_stat, p_value = stats.wilcoxon(dp_acc, ecdp_acc)
     print(f"Wilcoxon test (DP vs EC-DP): W={w_stat:.2f}, p={p_value:.4f}")
@@ -532,6 +564,8 @@ def run_sensitivity(args):
     plt.title('Sensitivity: EC-DP Accuracy vs c and α')
     plt.savefig('results/sensitivity_heatmap.png')
 =======
+=======
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     # We'll run multiple trials with different seeds
     basic_means, ecdp_means = [], []
     basic_stds, ecdp_stds = [], []
@@ -589,6 +623,9 @@ def run_sensitivity(args):
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
     plt.savefig('results/tradeoff.png', dpi=150)
+<<<<<<< HEAD
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     plt.show()
 
@@ -606,6 +643,9 @@ if __name__ == '__main__':
     parser.add_argument('--epsilon', type=float, default=20.0)
     parser.add_argument('--clip_norm', type=float, default=2.1)
     parser.add_argument('--rounds', type=int, default=10)
+<<<<<<< HEAD
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42)
@@ -629,6 +669,7 @@ if __name__ == '__main__':
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
+<<<<<<< HEAD
 <<<<<<< HEAD
     args.device = device
 
@@ -691,6 +732,10 @@ if __name__ == '__main__':
 =======
 
     if args.mode == 'comparison':
+=======
+
+    if args.mode == 'comparison':
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
         run_comparison(args.epsilon, args.clip_norm, args.rounds, device,
                        args.c, args.alpha, args.warm_up, seed=args.seed)
     elif args.mode == 'tradeoff':
@@ -699,5 +744,9 @@ if __name__ == '__main__':
                      device=device, base_seed=args.seed)
     elif args.mode == 'tune':
         tune_correction_params(args.epsilon, args.clip_norm, args.rounds, device,
+<<<<<<< HEAD
+                               seed=args.seed)
+>>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
+=======
                                seed=args.seed)
 >>>>>>> parent of e8091c8 (Updated CNN & Per-Round Epsilon)
