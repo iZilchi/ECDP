@@ -27,7 +27,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, alpha=None, seed=42):
+def get_dataset_components(dataset_name, num_clients=10, batch_size=BATCH_SIZE, alpha=None, seed=42):
     if dataset_name == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
@@ -44,8 +44,8 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, a
         class_names = ['NORMAL', 'PNEUMONIA']
     return client_loaders, test_loader, model_class, num_classes, class_names
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
-                   device='cpu', c=1.5, alpha=0.6, seed=42, plot=True, dataset='skin'):
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=20,
+                   device='cpu', c=2.5, alpha_corr=0.8, seed=42, plot=True, dataset='skin', alpha_data=None):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -53,12 +53,14 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, seed={seed}, dataset={dataset}")
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha_corr}, seed={seed}, dataset={dataset}, alpha_data={alpha_data}")
     print('='*60)
 
     set_seed(seed)
 
-    client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(dataset)
+    client_loaders, test_loader, model_class, num_classes, class_names = get_dataset_components(
+        dataset, alpha=alpha_data, seed=seed
+    )
 
     std_fl = StandardFL(3, model_class, device)
 
@@ -69,7 +71,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
         ecdp_fl = ECDPFL(3, model_class, device,
                          epsilon=per_round_epsilon,
                          clip_norm=clip_norm,
-                         c=c, alpha=alpha)
+                         c=c, alpha=alpha_corr)
     else:
         dp_fl = BasicDPFL(3, model_class, device,
                           epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
@@ -77,7 +79,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
         ecdp_fl = ECDPFL(3, model_class, device,
                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                          clip_norm=clip_norm,
-                         c=c, alpha=alpha)
+                         c=c, alpha=alpha_corr)
 
     methods = {'Standard FL': std_fl, 'Basic DP-FL': dp_fl, 'EC-DP-FL': ecdp_fl}
     histories = {}
@@ -101,18 +103,18 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
-        plt.title(f'Convergence ({mode}={eps}) - {dataset}')
+        plt.title(f'Convergence ({mode}={eps}) - {dataset} (alpha_data={alpha_data})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_seed{seed}.png', dpi=150)
+        plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_alpha{alpha_data}_seed{seed}.png', dpi=150)
         plt.show()
 
     return metrics, histories, test_loader
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_seed=42, mode='per_round', dataset='skin'):
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_seed=42, mode='per_round', dataset='skin', alpha_data=None):
     print("\n" + "="*70)
-    print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε) - {dataset}")
+    print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε) - {dataset} (alpha_data={alpha_data})")
     print("="*70)
 
     basic_means, ecdp_means = [], []
@@ -121,13 +123,15 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     for eps in epsilon_values:
         print(f"\n--- {mode} ε = {eps} ---")
         set_seed(base_seed)
-        client_loaders, test_loader, model_class, _, _ = get_dataset_components(dataset)
+        client_loaders, test_loader, model_class, _, _ = get_dataset_components(
+            dataset, alpha=alpha_data, seed=base_seed
+        )
 
         # Heuristic correction parameters (no warmup)
         if eps <= 0.5:
-            c, alpha = 1.5, 0.6
+            c, alpha_corr = 1.5, 0.6
         else:
-            c, alpha = 2.5, 0.8
+            c, alpha_corr = 2.5, 0.8
 
         if mode == 'per_round':
             dp = BasicDPFL(3, model_class, device,
@@ -136,7 +140,7 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
             ec = ECDPFL(3, model_class, device,
                         epsilon=eps,
                         clip_norm=clip_norm,
-                        c=c, alpha=alpha)
+                        c=c, alpha=alpha_corr)
         else:
             dp = BasicDPFL(3, model_class, device,
                            epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
@@ -144,7 +148,7 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
             ec = ECDPFL(3, model_class, device,
                         epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
                         clip_norm=clip_norm,
-                        c=c, alpha=alpha)
+                        c=c, alpha=alpha_corr)
 
         for r in range(num_rounds):
             dp.train_round(client_loaders, epochs=2)
@@ -167,7 +171,9 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
     # Standard FL accuracy (run once)
     set_seed(base_seed)
-    client_loaders, test_loader, model_class, _, _ = get_dataset_components(dataset)
+    client_loaders, test_loader, model_class, _, _ = get_dataset_components(
+        dataset, alpha=alpha_data, seed=base_seed
+    )
     std_fl = StandardFL(3, model_class, device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
@@ -176,11 +182,11 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     plt.xscale('log')
     plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
-    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}')
+    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset} (alpha_data={alpha_data})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}_{dataset}.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{mode}_{dataset}_alpha{alpha_data}.png', dpi=150)
     plt.show()
 
 if __name__ == '__main__':
@@ -188,19 +194,22 @@ if __name__ == '__main__':
     parser.add_argument('--mode', choices=['comparison', 'tradeoff'], default='comparison')
     parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin',
                         help='Choose dataset: skin (HAM10000) or chest (pneumonia)')
+    # Privacy budget: either per-round or total
     parser.add_argument('--per_round_epsilon', type=float, default=None,
                         help='Per‑round privacy budget (if using per‑round interpretation)')
     parser.add_argument('--target_epsilon', type=float, default=None,
                         help='Total privacy budget over all rounds (if using total interpretation)')
-    parser.add_argument('--clip_norm', type=float, default=3.5,
+    parser.add_argument('--clip_norm', type=float, default=2.3,
                         help='Clipping norm (suggested from analyze_gradients.py)')
     parser.add_argument('--rounds', type=int, default=20,
                         help='Number of federation rounds')
     parser.add_argument('--device', default=None,
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
-    parser.add_argument('--alpha', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
+    parser.add_argument('--c', type=float, default=2.5, help='Correction bound parameter (for comparison mode)')
+    parser.add_argument('--alpha_corr', type=float, default=0.8, help='Smoothing coefficient (for comparison mode)')
+    parser.add_argument('--alpha_data', type=float, default=None,
+                        help='Dirichlet concentration parameter for non-IID data. If None, IID. Typically 0.1, 0.5, 1.0.')
     args = parser.parse_args()
 
     # Device auto-detection
@@ -216,8 +225,10 @@ if __name__ == '__main__':
         assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
             "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
         run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                       args.c, args.alpha, seed=args.seed, dataset=args.dataset)
+                       args.c, args.alpha_corr, seed=args.seed, dataset=args.dataset,
+                       alpha_data=args.alpha_data)
     elif args.mode == 'tradeoff':
         epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds,
-                     device=device, base_seed=args.seed, mode='per_round', dataset=args.dataset)
+                     device=device, base_seed=args.seed, mode='per_round',
+                     dataset=args.dataset, alpha_data=args.alpha_data)
