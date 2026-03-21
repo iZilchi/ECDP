@@ -1,8 +1,8 @@
 import torch.nn as nn
 
 class MediumCNN(nn.Module):
-    def __init__(self, num_classes=7):
-        super().__init__()
+    def init(self, num_classes=7):
+        super().init()
         self.conv = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, padding=1),
             nn.ReLU(),
