@@ -72,7 +72,7 @@ def run_single_comparison(dataset, num_clients, participation_rate, alpha_dirich
     set_seed(seed)
 
     client_loaders, test_loader = get_dataloaders(
-        dataset, num_clients=num_clients, batch_size=64,
+        dataset, num_clients=num_clients, batch_size=32,
         alpha=alpha_dirichlet, seed=seed
     )
     num_classes, class_names = get_class_info(dataset)
@@ -296,7 +296,7 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
             seed = 42 + trial
             set_seed(seed)
             client_loaders, test_loader = get_dataloaders(
-                dataset, num_clients=num_clients, batch_size=64,
+                dataset, num_clients=num_clients, batch_size=32,
                 alpha=alpha_dirichlet, seed=seed
             )
             num_classes, class_names = get_class_info(dataset)
@@ -409,7 +409,7 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
             set_seed(seed)
 
             client_loaders, test_loader = get_dataloaders(
-                dataset, num_clients=num_clients, batch_size=64,
+                dataset, num_clients=num_clients, batch_size=32,
                 alpha=alpha_dirichlet, seed=seed
             )
 
@@ -461,7 +461,7 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
     # Standard FL accuracy (single run)
     set_seed(base_seed)
     client_loaders, test_loader = get_dataloaders(
-        dataset, num_clients=num_clients, batch_size=64,
+        dataset, num_clients=num_clients, batch_size=32,
         alpha=alpha_dirichlet, seed=base_seed
     )
     std_fl = StandardFL(num_clients, model_constructor, device,
