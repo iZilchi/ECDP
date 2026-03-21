@@ -104,7 +104,7 @@ def dirichlet_partition(dataset, num_clients, alpha, seed=42):
             start += size
     return client_indices
 
-def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/skin_cancer',
+def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/skin_cancer',
                                 alpha=None, seed=42, num_workers=4):
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
