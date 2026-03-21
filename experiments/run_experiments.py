@@ -8,9 +8,11 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
-from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
+<<<<<<< HEAD
 from models.chest_xray_cnn import ChestXRayCNN
+=======
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import compare_methods_comprehensive
@@ -58,11 +60,16 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+<<<<<<< HEAD
 # ---------- Main experiment ----------
 def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
                    per_round_epsilon=None, target_epsilon=None,
                    clip_norm=3.5, num_rounds=20, device='cpu',
                    c=1.5, alpha_smooth=0.6, seed=42, plot=True):
+=======
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
+                   c=2.5, alpha=0.8, warm_up=5, seed=42, plot=True):
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -70,16 +77,21 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
     else:
         mode = "total ε"
         eps = target_epsilon
+<<<<<<< HEAD
     print(f"Dataset: {dataset}")
     print(f"Data distribution: {'IID' if alpha_dirichlet is None else f'Non-IID (Dirichlet α={alpha_dirichlet})'}")
     print(f"Client participation: {participation_rate*100:.0f}%")
     print(f"Number of clients: {num_clients}")
     print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds")
     print(f"clip_norm={clip_norm}, c={c}, α={alpha_smooth}, seed={seed}")
+=======
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, warm_up={warm_up}, seed={seed}")
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     print('='*60)
 
     set_seed(seed)
 
+<<<<<<< HEAD
     client_loaders, test_loader = get_dataloaders(
         dataset, num_clients=num_clients, batch_size=32,
         alpha=alpha_dirichlet, seed=seed
@@ -96,11 +108,23 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
                           clip_norm=clip_norm,
                           participation_rate=participation_rate)
         ecdp_fl = ECDPFL(num_clients, model_constructor, device,
+=======
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+
+    std_fl = StandardFL(3, MediumCNN, device)
+    
+    if per_round_epsilon is not None:
+        dp_fl = BasicDPFL(3, MediumCNN, device,
+                          epsilon=per_round_epsilon,
+                          clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, MediumCNN, device,
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
                          epsilon=per_round_epsilon,
                          clip_norm=clip_norm,
                          c=c, alpha=alpha_smooth, warm_up=0,
                          participation_rate=participation_rate)
     else:
+<<<<<<< HEAD
         dp_fl = BasicDPFL(num_clients, model_constructor, device,
                           epsilon=None, target_epsilon=target_epsilon,
                           max_rounds=num_rounds, clip_norm=clip_norm,
@@ -110,6 +134,15 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
                          max_rounds=num_rounds, clip_norm=clip_norm,
                          c=c, alpha=alpha_smooth, warm_up=0,
                          participation_rate=participation_rate)
+=======
+        dp_fl = BasicDPFL(3, MediumCNN, device,
+                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
+                          clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, MediumCNN, device,
+                         epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
+                         clip_norm=clip_norm,
+                         c=c, alpha=alpha, warm_up=warm_up)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
 
     # Train and track accuracy per round
     histories = {}
@@ -123,11 +156,15 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
             print(f"Round {r+1}: {acc:.2f}%")
         histories[name] = acc_list
 
+<<<<<<< HEAD
     # Compute metrics
     metrics = compare_methods_comprehensive(
         std_fl, dp_fl, ecdp_fl, test_loader, device,
         num_classes=num_classes, class_names=class_names
     )
+=======
+    metrics = compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
 
     # Plot convergence
     if plot:
@@ -136,11 +173,19 @@ def run_comparison(dataset, num_clients, participation_rate, alpha_dirichlet,
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
+<<<<<<< HEAD
         plt.title(f'Convergence ({mode}={eps}) on {dataset}')
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
         plt.savefig(f'results/convergence_{dataset}_{mode}_{eps}_seed{seed}.png', dpi=150)
+=======
+        plt.title(f'Convergence ({mode}={eps})')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        os.makedirs('results', exist_ok=True)
+        plt.savefig(f'results/convergence_{mode}_{eps}_seed{seed}.png', dpi=150)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
         plt.show()
 
     return metrics, histories
@@ -150,6 +195,7 @@ def tune_correction_params(dataset, num_clients, participation_rate, alpha_diric
                            clip_norm=3.5, num_rounds=20, device='cpu',
                            c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8],
+<<<<<<< HEAD
                            seed=42):
     """Grid search over correction parameters (single run per combination)."""
     best_acc = -1
@@ -208,6 +254,30 @@ def ablation_study(dataset, num_clients, participation_rate, alpha_dirichlet,
     print(f"Data: {'IID' if alpha_dirichlet is None else f'Non-IID α={alpha_dirichlet}'}")
     print(f"Participation: {participation_rate*100:.0f}%, Clients: {num_clients}")
     print(f"Privacy: {'per-round ε='+str(per_round_epsilon) if per_round_epsilon else 'total ε='+str(target_epsilon)}")
+=======
+                           warm_up_values=[0, 3],
+                           seed=42):
+    """Sensitivity analysis for correction parameters."""
+    best_acc = -1
+    best_params = {}
+    for c in c_values:
+        for alpha in alpha_values:
+            for warm_up in warm_up_values:
+                print(f"\n--- Testing c={c}, α={alpha}, warm_up={warm_up} ---")
+                _, histories, _ = run_comparison(per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
+                                                  c, alpha, warm_up, seed=seed, plot=False)
+                acc = histories['EC-DP-FL'][-1]
+                print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
+                if acc > best_acc:
+                    best_acc = acc
+                    best_params = {'c': c, 'alpha': alpha, 'warm_up': warm_up}
+    print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
+    return best_params
+
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, num_trials=3, device='cpu', base_seed=42, mode='per_round'):
+    print("\n" + "="*70)
+    print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε)")
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     print("="*70)
 
     set_seed(seed)
@@ -298,6 +368,7 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
 
     for eps in epsilon_values:
         print(f"\n--- {mode} ε = {eps} ---")
+<<<<<<< HEAD
         set_seed(base_seed)
 
         client_loaders, test_loader = get_dataloaders(
@@ -310,6 +381,37 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
             c, alpha_smooth = 1.5, 0.6
         else:
             c, alpha_smooth = 2.5, 0.8
+=======
+        basic_accs, ecdp_accs = [], []
+        for trial in range(num_trials):
+            seed = base_seed + trial
+            print(f"  Trial {trial+1}/{num_trials} (seed={seed})")
+            set_seed(seed)
+            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+
+            # Heuristic correction parameters (can be replaced with tuned ones)
+            if eps <= 0.5:
+                c, alpha, warm_up = 1.5, 0.6, 3
+            else:
+                c, alpha, warm_up = 2.5, 0.8, 0
+
+            if mode == 'per_round':
+                dp = BasicDPFL(3, MediumCNN, device,
+                               epsilon=eps,
+                               clip_norm=clip_norm)
+                ec = ECDPFL(3, MediumCNN, device,
+                            epsilon=eps,
+                            clip_norm=clip_norm,
+                            c=c, alpha=alpha, warm_up=warm_up)
+            else:
+                dp = BasicDPFL(3, MediumCNN, device,
+                               epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
+                               clip_norm=clip_norm)
+                ec = ECDPFL(3, MediumCNN, device,
+                            epsilon=None, target_epsilon=eps, max_rounds=num_rounds,
+                            clip_norm=clip_norm,
+                            c=c, alpha=alpha, warm_up=warm_up)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
 
         if mode == 'per_round':
             dp = BasicDPFL(num_clients, model_constructor, device,
@@ -350,22 +452,43 @@ def run_tradeoff(dataset, num_clients, participation_rate, alpha_dirichlet,
 
     # Plot tradeoff
     plt.figure(figsize=(10,6))
+<<<<<<< HEAD
     plt.plot(epsilon_values, basic_accs, marker='o', label='Basic DP-FL')
     plt.plot(epsilon_values, ecdp_accs, marker='s', label='EC-DP-FL')
+=======
+    plt.errorbar(epsilon_values, basic_means, yerr=basic_stds, marker='o', label='Basic DP-FL', capsize=5)
+    plt.errorbar(epsilon_values, ecdp_means, yerr=ecdp_stds, marker='s', label='EC-DP-FL', capsize=5)
+    # Standard FL accuracy (run once)
+    set_seed(base_seed)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    std_fl = StandardFL(3, MediumCNN, device)
+    for r in range(num_rounds):
+        std_fl.train_round(client_loaders, epochs=2)
+    std_acc = std_fl.test_accuracy(test_loader)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
     plt.xscale('log')
     plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
+<<<<<<< HEAD
     dist = 'IID' if alpha_dirichlet is None else f'Non-IID α={alpha_dirichlet}'
     plt.title(f'Privacy‑Utility Tradeoff on {dataset} ({dist})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
     plt.savefig(f'results/tradeoff_{dataset}_{mode}_{dist.replace(" ", "_")}.png', dpi=150)
+=======
+    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    os.makedirs('results', exist_ok=True)
+    plt.savefig(f'results/tradeoff_{mode}.png', dpi=150)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     plt.show()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+<<<<<<< HEAD
     parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune', 'ablation', 'tune_clip_norm'],
                         default='comparison')
     parser.add_argument('--dataset', choices=['skin_cancer', 'chest_xray'], default='skin_cancer')
@@ -381,6 +504,24 @@ if __name__ == '__main__':
     parser.add_argument('--full_participation', action='store_true')
     parser.add_argument('--num_clients', type=int, default=3)
 
+=======
+    parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune'], default='comparison')
+    # Privacy budget: either per-round or total
+    parser.add_argument('--per_round_epsilon', type=float, default=None,
+                        help='Per‑round privacy budget (if using per‑round interpretation)')
+    parser.add_argument('--target_epsilon', type=float, default=None,
+                        help='Total privacy budget over all rounds (if using total interpretation)')
+    parser.add_argument('--clip_norm', type=float, default=2.3,
+                        help='Clipping norm (suggested from analyze_gradients.py)')
+    parser.add_argument('--rounds', type=int, default=20,
+                        help='Number of federation rounds')
+    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    # Correction parameters (used if mode=comparison)
+    parser.add_argument('--c', type=float, default=2.5)
+    parser.add_argument('--alpha', type=float, default=0.8)
+    parser.add_argument('--warm_up', type=int, default=5)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
     args = parser.parse_args()
 
     if args.device is None:
@@ -398,6 +539,7 @@ if __name__ == '__main__':
             parser.error(f"Mode '{args.mode}' requires either --per_round_epsilon or --target_epsilon")
 
     if args.mode == 'comparison':
+<<<<<<< HEAD
         run_comparison(
             args.dataset, num_clients, participation_rate, alpha_dirichlet,
             args.per_round_epsilon, args.target_epsilon,
@@ -433,3 +575,17 @@ if __name__ == '__main__':
             args.c, args.alpha_smooth,
             seed=args.seed
         )
+=======
+        run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
+                       args.c, args.alpha, args.warm_up, seed=args.seed)
+    elif args.mode == 'tradeoff':
+        # For tradeoff, we need to know which interpretation. Default to per_round.
+        # You can add a --tradeoff_mode argument if desired.
+        print("Tradeoff mode uses per‑round epsilon by default. Modify code if total epsilon needed.")
+        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, num_trials=3,
+                     device=device, base_seed=args.seed, mode='per_round')
+    elif args.mode == 'tune':
+        tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
+                               seed=args.seed)
+>>>>>>> parent of 0d001be (Updated Chest XRay Dataset)
