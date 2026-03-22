@@ -256,7 +256,7 @@ if __name__ == '__main__':
                         help='Device to use: cuda, cpu, or auto (default)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     # Correction parameters (used in comparison and tune)
-    parser.add_argument('--c', type=float, default=3.5, help='Correction bound parameter (for comparison mode)')
+    parser.add_argument('--c', type=float, default=1.5, help='Correction bound parameter (for comparison mode)')
     parser.add_argument('--alpha_corr', type=float, default=0.6, help='Smoothing coefficient (for comparison mode)')
     # Data heterogeneity
     parser.add_argument('--alpha_data', type=float, default=None,
