@@ -93,7 +93,8 @@ def run_single_experiment(method_class, num_clients, model_class, device,
         round_times.append(time.time() - start_round)
         acc = method.test_accuracy(test_loader)
         accuracy_history.append(acc)
-
+        # Print per-round accuracy
+        print(f"Round {r+1}: {acc:.2f}%")
     total_time = time.time() - start_total
 
     # Final metrics on test set
@@ -121,20 +122,28 @@ def run_single_experiment(method_class, num_clients, model_class, device,
     }
 
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
-                   device='cpu', c=1.5, alpha_corr=0.6, seed=42, plot=True, dataset='skin',
+                   device='cpu', c=None, alpha_corr=None, seed=42, plot=True, dataset='skin',
                    alpha_data=None, num_clients=3, participation_rate=0.5):
     """
     Run full comparison with a single seed (given by --seed).
+    If c or alpha_corr are None, they are chosen heuristically based on epsilon.
     """
     set_seed(seed)
 
-    print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
         eps = per_round_epsilon
     else:
         mode = "total ε"
         eps = target_epsilon
+
+    # Auto-select correction parameters if not provided
+    if c is None:
+        c = 1.5 if eps <= 0.5 else 2.5
+    if alpha_corr is None:
+        alpha_corr = 0.6 if eps <= 0.5 else 0.8
+
+    print(f"\n{'='*60}")
     print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha_corr}, seed={seed}, dataset={dataset}, alpha_data={alpha_data}, num_clients={num_clients}")
     print('='*60)
 
@@ -160,12 +169,14 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
     std_kwargs.pop('target_epsilon', None)
     std_kwargs.pop('max_rounds', None)
     std_kwargs.pop('clip_norm', None)
+    print("\n--- Training Standard FL ---")
     std_res = run_single_experiment(StandardFL, num_clients, model_class, device,
                                     client_loaders, test_loader, num_rounds, std_kwargs,
                                     class_names)
 
     # Basic DP-FL
     dp_kwargs = base_kwargs.copy()
+    print("\n--- Training Basic DP-FL ---")
     dp_res = run_single_experiment(BasicDPFL, num_clients, model_class, device,
                                    client_loaders, test_loader, num_rounds, dp_kwargs,
                                    class_names)
@@ -174,6 +185,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
     ecdp_kwargs = base_kwargs.copy()
     ecdp_kwargs['c'] = c
     ecdp_kwargs['alpha'] = alpha_corr
+    print("\n--- Training EC-DP-FL ---")
     ecdp_res = run_single_experiment(ECDPFL, num_clients, model_class, device,
                                      client_loaders, test_loader, num_rounds, ecdp_kwargs,
                                      class_names)
@@ -243,6 +255,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
     else:
         mode = "total ε"
         eps = target_epsilon
+
     print(f"\n{'='*70}")
     print(f"ABLATION STUDY: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, dataset={dataset}, alpha_data={alpha_data}, num_clients={num_clients}, seed={seed}")
     print('='*70)
@@ -365,15 +378,13 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     results_ecdp = []
     for eps in epsilon_values:
         print(f"\n--- ε = {eps} ---")
-        # Heuristic correction parameters
-        c = 1.5 if eps <= 0.5 else 2.5
-        alpha_corr = 0.6 if eps <= 0.5 else 0.8
-
-        # Run comparison for this epsilon (without plotting)
+        # Correction parameters chosen heuristically; they can be overridden by --c and --alpha_corr,
+        # but we are not passing them, so they'll be auto-selected inside run_comparison.
+        # However, run_comparison expects c and alpha_corr as arguments; we pass None to trigger auto.
         comp_res = run_comparison(per_round_epsilon=eps if mode=='per_round' else None,
                                   target_epsilon=eps if mode=='total' else None,
                                   clip_norm=clip_norm, num_rounds=num_rounds,
-                                  device=device, c=c, alpha_corr=alpha_corr,
+                                  device=device, c=None, alpha_corr=None,
                                   seed=base_seed, plot=False, dataset=dataset,
                                   alpha_data=alpha_data, num_clients=num_clients,
                                   participation_rate=participation_rate)
@@ -418,8 +429,9 @@ if __name__ == '__main__':
     parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--device', default=None)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--c', type=float, default=1.5)
-    parser.add_argument('--alpha_corr', type=float, default=0.6)
+    # Correction parameters – now default to None, meaning auto-select
+    parser.add_argument('--c', type=float, default=None, help='Correction bound parameter (auto if None)')
+    parser.add_argument('--alpha_corr', type=float, default=None, help='Smoothing coefficient (auto if None)')
     parser.add_argument('--alpha_data', type=float, default=None, help='Dirichlet concentration for non-IID')
     parser.add_argument('--num_clients', type=int, default=3)
     parser.add_argument('--participation_rate', type=float, default=0.5)
