@@ -13,7 +13,7 @@ class FederatedLearningBase:
         self.accuracy_history = []
         self.round_times = []
 
-    def train_round(self, client_loaders, epochs=3):
+    def train_round(self, client_loaders, epochs=2):
         start_time = time.time()
         n_participants = max(1, int(self.num_clients * self.participation_rate))
         participating_indices = random.sample(range(self.num_clients), n_participants)
