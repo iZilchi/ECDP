@@ -52,7 +52,11 @@ class FederatedLearningBase:
                 optimizer.step()
 
         new_weights = model.state_dict()
-        update = {k: new_weights[k] - global_weights[k] for k in global_weights}
+        update = {}
+        for k in global_weights:
+            # Only include float tensors (weights, biases) – exclude integer parameters like num_batches_tracked
+            if new_weights[k].dtype in (torch.float, torch.float32, torch.float64):
+                update[k] = new_weights[k] - global_weights[k]
         return update
 
     def _aggregate_updates(self, client_updates):
