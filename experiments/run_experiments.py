@@ -76,10 +76,11 @@ def convergence_round(accuracy_history, final_acc, threshold=0.95):
 
 def run_single_experiment(method_class, num_clients, model_class, device,
                           client_loaders, test_loader, num_rounds,
-                          method_kwargs):
+                          method_kwargs, class_names):
     """
     Train a single method and return all metrics.
     method_kwargs: dict passed to method constructor.
+    class_names: list of class names for the dataset.
     """
     method = method_class(num_clients, model_class, device, **method_kwargs)
     accuracy_history = []
@@ -160,19 +161,22 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
     std_kwargs.pop('max_rounds', None)
     std_kwargs.pop('clip_norm', None)
     std_res = run_single_experiment(StandardFL, num_clients, model_class, device,
-                                    client_loaders, test_loader, num_rounds, std_kwargs)
+                                    client_loaders, test_loader, num_rounds, std_kwargs,
+                                    class_names)
 
     # Basic DP-FL
     dp_kwargs = base_kwargs.copy()
     dp_res = run_single_experiment(BasicDPFL, num_clients, model_class, device,
-                                   client_loaders, test_loader, num_rounds, dp_kwargs)
+                                   client_loaders, test_loader, num_rounds, dp_kwargs,
+                                   class_names)
 
     # EC-DP-FL
     ecdp_kwargs = base_kwargs.copy()
     ecdp_kwargs['c'] = c
     ecdp_kwargs['alpha'] = alpha_corr
     ecdp_res = run_single_experiment(ECDPFL, num_clients, model_class, device,
-                                     client_loaders, test_loader, num_rounds, ecdp_kwargs)
+                                     client_loaders, test_loader, num_rounds, ecdp_kwargs,
+                                     class_names)
 
     # Print results table
     print("\n" + "="*70)
@@ -259,72 +263,23 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
         base_kwargs['target_epsilon'] = target_epsilon
         base_kwargs['max_rounds'] = num_rounds
 
-    # Define partial correction classes (will modify error correction flags)
-    class DPWithClippingOnly(ECDPFL):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            # Disable smoothing (only extreme value clipping)
-            self.error_correction.use_smoothing = False
-
-    class DPWithSmoothingOnly(ECDPFL):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            # Disable clipping (only smoothing)
-            self.error_correction.use_clipping = False
-
-    # Now we need to modify ErrorCorrection class to have these flags.
-    # Since we can't modify the original at runtime easily, we'll do a small monkey-patch.
-    # This must be done before instantiating these classes.
-    # We'll patch the apply method to check flags.
-    # But easier: we can set attributes on the instance and override apply.
-    # For simplicity, we'll create a separate class that inherits ErrorCorrection and adds flags.
-    from core.error_correction import ErrorCorrection
-    class FlaggedErrorCorrection(ErrorCorrection):
-        def __init__(self, momentum=0.9):
-            super().__init__(momentum)
-            self.use_clipping = True
-            self.use_smoothing = True
-
-        def apply(self, noisy_update, alpha, c, use_clipping=None, use_smoothing=None):
-            # If flags are passed, use them; otherwise use instance flags
-            use_clipping = self.use_clipping if use_clipping is None else use_clipping
-            use_smoothing = self.use_smoothing if use_smoothing is None else use_smoothing
-            return super().apply(noisy_update, alpha, c, use_clipping, use_smoothing)
-
-    # Replace ErrorCorrection in the module for the partial classes
-    import core.error_correction
-    core.error_correction.ErrorCorrection = FlaggedErrorCorrection
-
-    # Now re-import ECDPFL to ensure it uses the patched class
-    from core.dpfl import ECDPFL
-    # But we need to ensure the patch is applied before the classes are defined. However, the classes are defined already.
-    # Since we imported ECDPFL above, it has already imported ErrorCorrection from core.error_correction.
-    # We need to reload the module or patch after import. Simpler: patch the class directly:
-    # We'll create a new class that inherits ECDPFL and sets the flags in its error_correction instance.
-    class DPWithClippingOnly(ECDPFL):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.error_correction.use_smoothing = False
-
-    class DPWithSmoothingOnly(ECDPFL):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.error_correction.use_clipping = False
-
-    # But we also need to ensure that the original ErrorCorrection supports these flags. We'll add them to the original class.
-    # Let's modify the original ErrorCorrection class directly (monkey patch) to add the attributes and adjust apply.
+    # Monkey patch ErrorCorrection to support flags (if not already done)
     from core.error_correction import ErrorCorrection
     original_apply = ErrorCorrection.apply
-    def new_apply(self, noisy_update, alpha, c, use_clipping=True, use_smoothing=True):
-        # Override with instance flags if not explicitly passed
+    def new_apply(self, noisy_update, alpha, c, use_clipping=None, use_smoothing=None):
+        # If instance flags exist, use them; otherwise use the passed ones (default True)
         if hasattr(self, 'use_clipping'):
             use_clipping = self.use_clipping
+        else:
+            use_clipping = True if use_clipping is None else use_clipping
         if hasattr(self, 'use_smoothing'):
             use_smoothing = self.use_smoothing
+        else:
+            use_smoothing = True if use_smoothing is None else use_smoothing
         return original_apply(self, noisy_update, alpha, c, use_clipping, use_smoothing)
     ErrorCorrection.apply = new_apply
 
-    # Now we can create the partial classes safely
+    # Define partial correction classes
     class DPWithClippingOnly(ECDPFL):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -348,19 +303,19 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
         print(f"\n--- Running {name} ---")
         kwargs = base_kwargs.copy()
         if name != 'DP only':
-            # For correction methods, we need c and alpha
-            # Use heuristic based on epsilon
+            # For correction methods, we need c and alpha (use heuristics based on epsilon)
             if eps is not None:
                 if eps <= 0.5:
                     c, alpha = 1.5, 0.6
                 else:
                     c, alpha = 2.5, 0.8
             else:
-                c, alpha = 2.5, 0.8  # default if not given
+                c, alpha = 2.5, 0.8  # default
             kwargs['c'] = c
             kwargs['alpha'] = alpha
         res = run_single_experiment(cls, num_clients, model_class, device,
-                                    client_loaders, test_loader, num_rounds, kwargs)
+                                    client_loaders, test_loader, num_rounds, kwargs,
+                                    class_names)
         results[name] = res
 
     # Print results table
