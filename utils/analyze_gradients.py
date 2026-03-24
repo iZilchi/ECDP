@@ -18,23 +18,23 @@ from models.chest_xray_cnn import ChestXRayCNN
 
 def get_model_constructor(dataset):
     """Return model class for the dataset."""
-    if dataset == 'skin_cancer':
+    if dataset == 'skin':
         return MediumCNN
-    elif dataset == 'chest_xray':
+    elif dataset == 'chest':
         return ChestXRayCNN
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
 def get_dataloaders(dataset, num_clients, batch_size, alpha, seed):
     """Return (client_loaders, test_loader) for chosen dataset."""
-    if dataset == 'skin_cancer':
+    if dataset == 'skin':
         return get_skin_cancer_dataloaders(
             num_clients=num_clients,
             batch_size=batch_size,
             alpha=alpha,
             seed=seed
         )
-    elif dataset == 'chest_xray':
+    elif dataset == 'chest':
         return get_chest_xray_dataloaders(
             num_clients=num_clients,
             batch_size=batch_size,
@@ -45,7 +45,7 @@ def get_dataloaders(dataset, num_clients, batch_size, alpha, seed):
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
-def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches=40,
+def analyze_update_norms(dataset='skin', num_clients=3, epochs=2, batches=40,
                          batch_size=32, alpha=None, seed=42):
     """Analyze gradient norms for a given dataset."""
     print("="*70)
@@ -111,7 +111,7 @@ def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches
     print(f"Moderate     (75th %ile): clip_norm ≈ {p75:.1f}")
     print(f"Aggressive   (95th %ile): clip_norm ≈ {p95:.1f}")
 
-    candidates = [0.5, 1.0, 1.5, 2.0, 3.5, 5.0, 10.0, 15.0, 20.0]
+    candidates = [0.1, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0]
     closest_candidate = min(candidates, key=lambda x: abs(x - p75))
     print(f"\n🎯 SUGGESTED clip_norm (from candidates {candidates}):")
     print(f"   clip_norm = {closest_candidate}")
@@ -129,7 +129,7 @@ def analyze_update_norms(dataset='skin_cancer', num_clients=3, epochs=2, batches
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Analyze gradient norms for clipping norm selection.')
-    parser.add_argument('--dataset', choices=['skin_cancer', 'chest_xray'], default='skin_cancer',
+    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin_',
                         help='Dataset to analyze')
     parser.add_argument('--num_clients', type=int, default=3,
                         help='Number of simulated clients')

@@ -4,19 +4,18 @@ import time
 import random
 
 class FederatedLearningBase:
-    def __init__(self, num_clients, model_class, device, participation_rate=1.0):
+    def __init__(self, num_clients, model_class, device):
         self.num_clients = num_clients
         self.model_class = model_class
         self.device = device
-        self.participation_rate = participation_rate
         self.global_model = model_class().to(device)
         self.accuracy_history = []
         self.round_times = []
 
     def train_round(self, client_loaders, epochs=2):
         start_time = time.time()
-        n_participants = max(1, int(self.num_clients * self.participation_rate))
-        participating_indices = random.sample(range(self.num_clients), n_participants)
+        # All clients participate
+        participating_indices = list(range(self.num_clients))
         participating_loaders = [client_loaders[i] for i in participating_indices]
 
         global_weights = copy.deepcopy(self.global_model.state_dict())

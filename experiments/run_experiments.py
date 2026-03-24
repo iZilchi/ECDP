@@ -93,7 +93,6 @@ def run_single_experiment(method_class, num_clients, model_class, device,
         round_times.append(time.time() - start_round)
         acc = method.test_accuracy(test_loader)
         accuracy_history.append(acc)
-        # Print per-round accuracy
         print(f"Round {r+1}: {acc:.2f}%")
     total_time = time.time() - start_total
 
@@ -120,10 +119,9 @@ def run_single_experiment(method_class, num_clients, model_class, device,
         'inference_latency': infer_lat,
         'model_size': model_size,
     }
-
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.0, num_rounds=20,
                    device='cpu', c=None, alpha_corr=None, seed=42, plot=True, dataset='skin',
-                   alpha_data=None, num_clients=3, participation_rate=0.5):
+                   alpha_data=None, num_clients=3):
     """
     Run full comparison with a single seed (given by --seed).
     If c or alpha_corr are None, they are chosen heuristically based on epsilon.
@@ -154,8 +152,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
 
     # Prepare method kwargs
     base_kwargs = {
-        'clip_norm': clip_norm,
-        'participation_rate': participation_rate
+        'clip_norm': clip_norm
     }
     if per_round_epsilon is not None:
         base_kwargs['epsilon'] = per_round_epsilon
@@ -241,9 +238,8 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, n
 
     return {'std': std_res, 'dp': dp_res, 'ecdp': ecdp_res}
 
-def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num_rounds=20,
-                 device='cpu', seed=42, dataset='skin', alpha_data=None, num_clients=3,
-                 participation_rate=0.5):
+def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.0, num_rounds=20,
+                 device='cpu', seed=42, dataset='skin', alpha_data=None, num_clients=3, plot=True):
     """
     Run ablation study: DP only, DP+Extreme Clipping, DP+Smoothing, Full EC-DP-FL.
     """
@@ -267,8 +263,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
 
     # Base kwargs
     base_kwargs = {
-        'clip_norm': clip_norm,
-        'participation_rate': participation_rate
+        'clip_norm': clip_norm
     }
     if per_round_epsilon is not None:
         base_kwargs['epsilon'] = per_round_epsilon
@@ -280,7 +275,6 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
     from core.error_correction import ErrorCorrection
     original_apply = ErrorCorrection.apply
     def new_apply(self, noisy_update, alpha, c, use_clipping=None, use_smoothing=None):
-        # If instance flags exist, use them; otherwise use the passed ones (default True)
         if hasattr(self, 'use_clipping'):
             use_clipping = self.use_clipping
         else:
@@ -316,14 +310,13 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
         print(f"\n--- Running {name} ---")
         kwargs = base_kwargs.copy()
         if name != 'DP only':
-            # For correction methods, we need c and alpha (use heuristics based on epsilon)
             if eps is not None:
                 if eps <= 0.5:
                     c, alpha = 1.5, 0.6
                 else:
                     c, alpha = 2.5, 0.8
             else:
-                c, alpha = 2.5, 0.8  # default
+                c, alpha = 2.5, 0.8
             kwargs['c'] = c
             kwargs['alpha'] = alpha
         res = run_single_experiment(cls, num_clients, model_class, device,
@@ -348,25 +341,25 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=3.5, num
         print(f"  Model Size: {res['model_size']:.2f}MB")
 
     # Plot convergence for all configurations
-    plt.figure(figsize=(10,6))
-    rounds = range(1, num_rounds+1)
-    colors = {'DP only': 'r', 'DP + Extreme Clipping': 'orange', 'DP + Smoothing': 'purple', 'Full EC-DP-FL': 'g'}
-    for name, res in results.items():
-        plt.plot(rounds, res['accuracy_history'], label=name, color=colors.get(name, 'k'))
-    plt.xlabel('Federation Round')
-    plt.ylabel('Accuracy (%)')
-    plt.title(f'Ablation Study: {mode}={eps} - {dataset}')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/ablation_{mode}_{eps}_{dataset}_alpha{alpha_data}_clients{num_clients}.png', dpi=150)
-    plt.show()
+    if plot:
+        plt.figure(figsize=(10,6))
+        rounds = range(1, num_rounds+1)
+        colors = {'DP only': 'r', 'DP + Extreme Clipping': 'orange', 'DP + Smoothing': 'purple', 'Full EC-DP-FL': 'g'}
+        for name, res in results.items():
+            plt.plot(rounds, res['accuracy_history'], label=name, color=colors.get(name, 'k'))
+        plt.xlabel('Federation Round')
+        plt.ylabel('Accuracy (%)')
+        plt.title(f'Ablation Study: {mode}={eps} - {dataset}')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        os.makedirs('results', exist_ok=True)
+        plt.savefig(f'results/ablation_{mode}_{eps}_{dataset}_alpha{alpha_data}_clients{num_clients}.png', dpi=150)
+        plt.show()
 
     return results
 
 def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_seed=42,
-                 mode='per_round', dataset='skin', alpha_data=None, num_clients=3,
-                 participation_rate=0.5):
+                 mode='per_round', dataset='skin', alpha_data=None, num_clients=3, plot=True):
     """
     Run privacy‑utility tradeoff for multiple epsilon values, single seed.
     """
@@ -378,44 +371,41 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=20, device='cpu', base_se
     results_ecdp = []
     for eps in epsilon_values:
         print(f"\n--- ε = {eps} ---")
-        # Correction parameters chosen heuristically; they can be overridden by --c and --alpha_corr,
-        # but we are not passing them, so they'll be auto-selected inside run_comparison.
-        # However, run_comparison expects c and alpha_corr as arguments; we pass None to trigger auto.
         comp_res = run_comparison(per_round_epsilon=eps if mode=='per_round' else None,
                                   target_epsilon=eps if mode=='total' else None,
                                   clip_norm=clip_norm, num_rounds=num_rounds,
                                   device=device, c=None, alpha_corr=None,
                                   seed=base_seed, plot=False, dataset=dataset,
-                                  alpha_data=alpha_data, num_clients=num_clients,
-                                  participation_rate=participation_rate)
+                                  alpha_data=alpha_data, num_clients=num_clients)
         basic_acc = comp_res['dp']['final_accuracy']
         ecdp_acc = comp_res['ecdp']['final_accuracy']
         results_basic.append(basic_acc)
         results_ecdp.append(ecdp_acc)
 
     # Plot tradeoff
-    plt.figure(figsize=(10,6))
-    plt.plot(epsilon_values, results_basic, 'o-', label='Basic DP-FL')
-    plt.plot(epsilon_values, results_ecdp, 's-', label='EC-DP-FL')
-    # Compute Standard FL accuracy once
-    set_seed(base_seed)
-    client_loaders, test_loader, model_class, _, _ = get_dataset_components(
-        dataset, num_clients=num_clients, alpha=alpha_data, seed=base_seed
-    )
-    std_fl = StandardFL(num_clients, model_class, device, participation_rate=participation_rate)
-    for _ in range(num_rounds):
-        std_fl.train_round(client_loaders, epochs=2)
-    std_acc = std_fl.test_accuracy(test_loader)
-    plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
-    plt.xscale('log')
-    plt.xlabel(f'Privacy budget ε ({mode})')
-    plt.ylabel('Accuracy (%)')
-    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}_{dataset}_alpha{alpha_data}_clients{num_clients}.png', dpi=150)
-    plt.show()
+    if plot:
+        plt.figure(figsize=(10,6))
+        plt.plot(epsilon_values, results_basic, 'o-', label='Basic DP-FL')
+        plt.plot(epsilon_values, results_ecdp, 's-', label='EC-DP-FL')
+        # Compute Standard FL accuracy once
+        set_seed(base_seed)
+        client_loaders, test_loader, model_class, _, _ = get_dataset_components(
+            dataset, num_clients=num_clients, alpha=alpha_data, seed=base_seed
+        )
+        std_fl = StandardFL(num_clients, model_class, device)
+        for _ in range(num_rounds):
+            std_fl.train_round(client_loaders, epochs=2)
+        std_acc = std_fl.test_accuracy(test_loader)
+        plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
+        plt.xscale('log')
+        plt.xlabel(f'Privacy budget ε ({mode})')
+        plt.ylabel('Accuracy (%)')
+        plt.title(f'Privacy‑Utility Tradeoff ({mode} ε) - {dataset}')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        os.makedirs('results', exist_ok=True)
+        plt.savefig(f'results/tradeoff_{mode}_{dataset}_alpha{alpha_data}_clients{num_clients}.png', dpi=150)
+        plt.show()
 
     return results_basic, results_ecdp
 
@@ -425,16 +415,18 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin')
     parser.add_argument('--per_round_epsilon', type=float, default=None)
     parser.add_argument('--target_epsilon', type=float, default=None)
-    parser.add_argument('--clip_norm', type=float, default=3.5)
+    parser.add_argument('--clip_norm', type=float, default=3.0)
     parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--device', default=None)
     parser.add_argument('--seed', type=int, default=42)
-    # Correction parameters – now default to None, meaning auto-select
     parser.add_argument('--c', type=float, default=None, help='Correction bound parameter (auto if None)')
     parser.add_argument('--alpha_corr', type=float, default=None, help='Smoothing coefficient (auto if None)')
     parser.add_argument('--alpha_data', type=float, default=None, help='Dirichlet concentration for non-IID')
     parser.add_argument('--num_clients', type=int, default=3)
-    parser.add_argument('--participation_rate', type=float, default=0.5)
+    parser.add_argument('--plot', action='store_true', default=True,
+                        help='Show convergence plots (default: True)')
+    parser.add_argument('--no-plot', dest='plot', action='store_false',
+                        help='Do not show plots (useful for grid search)')
     args = parser.parse_args()
 
     if args.device is None:
@@ -450,16 +442,15 @@ if __name__ == '__main__':
             "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
         run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
                        args.c, args.alpha_corr, seed=args.seed, dataset=args.dataset,
-                       alpha_data=args.alpha_data, num_clients=args.num_clients,
-                       participation_rate=args.participation_rate)
+                       alpha_data=args.alpha_data, num_clients=args.num_clients, plot=args.plot)
     elif args.mode == 'ablation':
         assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
             "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
         run_ablation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
                      seed=args.seed, dataset=args.dataset, alpha_data=args.alpha_data,
-                     num_clients=args.num_clients, participation_rate=args.participation_rate)
+                     num_clients=args.num_clients, plot=args.plot)
     elif args.mode == 'tradeoff':
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device=device, base_seed=args.seed,
                      mode='per_round', dataset=args.dataset, alpha_data=args.alpha_data,
-                     num_clients=args.num_clients, participation_rate=args.participation_rate)
+                     num_clients=args.num_clients, plot=args.plot)

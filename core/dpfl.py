@@ -12,10 +12,8 @@ class BasicDPFL(FederatedLearningBase):
     """
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
-                 target_epsilon=None, max_rounds=100,
-                 participation_rate=0.5):
-        super().__init__(num_clients, model_class, device,
-                         participation_rate=participation_rate)
+                 target_epsilon=None, max_rounds=100):
+        super().__init__(num_clients, model_class, device)
         assert (epsilon is not None) or (target_epsilon is not None), \
             "Either epsilon or target_epsilon must be provided"
         self.epsilon = epsilon                # per‑round epsilon
@@ -31,6 +29,8 @@ class BasicDPFL(FederatedLearningBase):
 
     def _compute_noise_scale(self):
         """Compute noise multiplier for this round."""
+        # Sensitivity for averaging: clip_norm / number_of_participants
+        # Since all clients participate, participants = num_clients
         sensitivity = self.clip_norm / self.num_clients
         if self.epsilon_target is not None:
             eps_per_round = self.epsilon_target / self.max_rounds
@@ -66,12 +66,10 @@ class ECDPFL(BasicDPFL):
     def __init__(self, num_clients, model_class, device,
                  epsilon=None, delta=1e-5, clip_norm=1.0,
                  target_epsilon=None, max_rounds=100,
-                 c=2.5, alpha=0.8, correction_momentum=0.9,
-                 participation_rate=0.5):
+                 c=2.5, alpha=0.8, correction_momentum=0.9):
         super().__init__(num_clients, model_class, device,
                          epsilon, delta, clip_norm,
-                         target_epsilon, max_rounds,
-                         participation_rate=participation_rate)
+                         target_epsilon, max_rounds)
         self.c = c
         self.alpha = alpha
         self.error_correction = ErrorCorrection(momentum=correction_momentum)
