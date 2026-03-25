@@ -12,6 +12,7 @@ from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
+from models.resnet18 import ResNet18ForSkin  # new import
 
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
@@ -33,7 +34,8 @@ def get_dataset_components(dataset_name, num_clients=3, batch_size=BATCH_SIZE, a
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=batch_size, alpha=alpha, seed=seed
         )
-        model_class = lambda: MediumCNN(num_classes=7)
+        # Use ResNet‑18 for skin
+        model_class = lambda: ResNet18ForSkin(num_classes=7, pretrained=True)
         num_classes = 7
         class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
     else:  # chest
@@ -119,6 +121,7 @@ def run_single_experiment(method_class, num_clients, model_class, device,
         'inference_latency': infer_lat,
         'model_size': model_size,
     }
+
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=3.0, num_rounds=20,
                    device='cpu', c=None, alpha_corr=None, seed=42, plot=True, dataset='skin',
                    alpha_data=None, num_clients=3):
@@ -450,7 +453,7 @@ if __name__ == '__main__':
                      seed=args.seed, dataset=args.dataset, alpha_data=args.alpha_data,
                      num_clients=args.num_clients, plot=args.plot)
     elif args.mode == 'tradeoff':
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0]
+        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device=device, base_seed=args.seed,
                      mode='per_round', dataset=args.dataset, alpha_data=args.alpha_data,
                      num_clients=args.num_clients, plot=args.plot)

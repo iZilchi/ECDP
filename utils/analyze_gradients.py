@@ -1,7 +1,7 @@
 """
 Analyze model update norms after local training.
 This helps calibrate the clipping norm (C) for differential privacy.
-Supports both HAM10000 (skin cancer) and Chest X-ray datasets.
+Supports both HAM10000 (skin cancer) and Chest X-ray datasets, and different models.
 """
 
 import argparse
@@ -15,26 +15,31 @@ from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_xray_cnn import ChestXRayCNN
+from models.resnet18 import ResNet18ForSkin
 
-def get_model_constructor(dataset):
-    """Return model class for the dataset."""
-    if dataset == 'skin':
-        return MediumCNN
-    elif dataset == 'chest':
+def get_model_constructor(dataset, model_name):
+    """Return model class for the dataset and model name."""
+    if dataset in ['skin_cancer', 'skin']:
+        if model_name == 'resnet18':
+            return ResNet18ForSkin
+        else:  # default medium_cnn
+            return MediumCNN
+    elif dataset in ['chest_xray', 'chest']:
+        # Chest only has one model; ignore model_name
         return ChestXRayCNN
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
 def get_dataloaders(dataset, num_clients, batch_size, alpha, seed):
     """Return (client_loaders, test_loader) for chosen dataset."""
-    if dataset == 'skin':
+    if dataset in ['skin_cancer', 'skin']:
         return get_skin_cancer_dataloaders(
             num_clients=num_clients,
             batch_size=batch_size,
             alpha=alpha,
             seed=seed
         )
-    elif dataset == 'chest':
+    elif dataset in ['chest_xray', 'chest']:
         return get_chest_xray_dataloaders(
             num_clients=num_clients,
             batch_size=batch_size,
@@ -46,14 +51,14 @@ def get_dataloaders(dataset, num_clients, batch_size, alpha, seed):
         raise ValueError(f"Unknown dataset: {dataset}")
 
 def analyze_update_norms(dataset='skin', num_clients=3, epochs=2, batches=40,
-                         batch_size=32, alpha=None, seed=42):
-    """Analyze gradient norms for a given dataset."""
+                         batch_size=32, alpha=None, seed=42, model='medium_cnn'):
+    """Analyze gradient norms for a given dataset and model."""
     print("="*70)
-    print(f"🔬 UPDATE NORM ANALYSIS FOR {dataset.upper()}")
+    print(f"🔬 UPDATE NORM ANALYSIS FOR {dataset.upper()} using {model}")
     print("="*70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_constructor = get_model_constructor(dataset)
+    model_constructor = get_model_constructor(dataset, model)
     client_loaders, _ = get_dataloaders(dataset, num_clients, batch_size, alpha, seed)
 
     update_norms = []
@@ -81,8 +86,10 @@ def analyze_update_norms(dataset='skin', num_clients=3, epochs=2, batches=40,
         final_weights = model.state_dict()
         squared_sum = 0.0
         for key in initial_weights:
-            diff = final_weights[key] - initial_weights[key]
-            squared_sum += torch.sum(diff ** 2).item()
+            # Only consider float tensors
+            if final_weights[key].dtype in (torch.float, torch.float32, torch.float64):
+                diff = final_weights[key] - initial_weights[key]
+                squared_sum += torch.sum(diff ** 2).item()
         norm = np.sqrt(squared_sum)
         update_norms.append(norm)
         print(f"  Update L2 norm = {norm:.2f}")
@@ -107,16 +114,19 @@ def analyze_update_norms(dataset='skin', num_clients=3, epochs=2, batches=40,
     p75 = np.percentile(update_norms, 75)
     p95 = np.percentile(update_norms, 95)
 
-    print(f"Conservative (50th %ile): clip_norm ≈ {p50:.1f}")
-    print(f"Moderate     (75th %ile): clip_norm ≈ {p75:.1f}")
-    print(f"Aggressive   (95th %ile): clip_norm ≈ {p95:.1f}")
+    print(f"Conservative (50th %ile): clip_norm ≈ {p50:.2f}")
+    print(f"Moderate     (75th %ile): clip_norm ≈ {p75:.2f}")
+    print(f"Aggressive   (95th %ile): clip_norm ≈ {p95:.2f}")
 
+    # Optional: reference standard candidate values (not used for selection)
     candidates = [0.1, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0]
     closest_candidate = min(candidates, key=lambda x: abs(x - p75))
-    print(f"\n🎯 SUGGESTED clip_norm (from candidates {candidates}):")
-    print(f"   clip_norm = {closest_candidate}")
+
+    print(f"\n🎯 RECOMMENDED clip_norm:")
+    print(f"   clip_norm = {p75:.2f}  (exact 75th percentile)")
+    print(f"   (For reference, the closest standard value is {closest_candidate:.1f})")
     print(f"   (Based on 75th percentile, which clips ~25% of updates)")
-    
+
     return {
         'mean': update_norms.mean(),
         'median': np.median(update_norms),
@@ -124,12 +134,12 @@ def analyze_update_norms(dataset='skin', num_clients=3, epochs=2, batches=40,
         'p50': p50,
         'p75': p75,
         'p95': p95,
-        'suggested': closest_candidate
+        'suggested': p75
     }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Analyze gradient norms for clipping norm selection.')
-    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin_',
+    parser.add_argument('--dataset', choices=['skin_cancer', 'skin', 'chest_xray', 'chest'], default='skin',
                         help='Dataset to analyze')
     parser.add_argument('--num_clients', type=int, default=3,
                         help='Number of simulated clients')
@@ -143,6 +153,8 @@ if __name__ == "__main__":
                         help='Use IID data distribution (default: Non-IID α=0.5)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
+    parser.add_argument('--model', choices=['medium_cnn', 'resnet18'], default='medium_cnn',
+                        help='Model architecture (only for skin dataset)')
     args = parser.parse_args()
 
     alpha = None if args.iid else 0.5
@@ -153,6 +165,7 @@ if __name__ == "__main__":
         batches=args.batches,
         batch_size=args.batch_size,
         alpha=alpha,
-        seed=args.seed
+        seed=args.seed,
+        model=args.model
     )
-    print(f"\n💾 Recommended clip_norm for {args.dataset} = {stats['suggested']}")
+    print(f"\n💾 Recommended clip_norm for {args.dataset} with {args.model} = {stats['suggested']:.2f}")
