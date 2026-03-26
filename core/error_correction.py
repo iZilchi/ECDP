@@ -10,7 +10,12 @@ class ErrorCorrection:
               use_clipping=True, use_smoothing=True):
         corrected = {}
         for key, tensor in noisy_update.items():
-            # Update running statistics
+            # --- Skip non-float tensors ---
+            if tensor.dtype not in (torch.float, torch.float32, torch.float64):
+                corrected[key] = tensor   # leave unchanged
+                continue
+
+            # Update running statistics (only for float tensors)
             if key not in self.mean_running:
                 self.mean_running[key] = tensor.mean().item()
                 self.std_running[key] = tensor.std().item()
@@ -22,6 +27,7 @@ class ErrorCorrection:
                 self.std_running[key] = (self.momentum * self.std_running[key] +
                                          (1 - self.momentum) * new_std)
 
+            # Apply clipping
             if use_clipping:
                 lower = self.mean_running[key] - c * self.std_running[key]
                 upper = self.mean_running[key] + c * self.std_running[key]
@@ -29,6 +35,7 @@ class ErrorCorrection:
             else:
                 clipped = tensor
 
+            # Apply smoothing
             if use_smoothing:
                 corrected[key] = alpha * clipped + (1 - alpha) * tensor
             else:
