@@ -28,7 +28,11 @@ class FederatedLearningBase:
 
         new_weights = {}
         for key in global_weights:
-            new_weights[key] = global_weights[key] + aggregated_update[key]
+            # Add the aggregated update if it exists; otherwise keep the original weight (for buffers)
+            if key in aggregated_update:
+                new_weights[key] = global_weights[key] + aggregated_update[key]
+            else:
+                new_weights[key] = global_weights[key]  # buffers stay unchanged
         self.global_model.load_state_dict(new_weights)
 
         self.round_times.append(time.time() - start_time)
@@ -53,13 +57,16 @@ class FederatedLearningBase:
         new_weights = model.state_dict()
         update = {}
         for k in global_weights:
-            # Only include float tensors (weights, biases) – exclude integer parameters like num_batches_tracked
+            # Include all keys, but only trainable ones get a non‑zero update
             if new_weights[k].dtype in (torch.float, torch.float32, torch.float64):
                 update[k] = new_weights[k] - global_weights[k]
+            else:
+                update[k] = torch.zeros_like(global_weights[k])
         return update
 
     def _aggregate_updates(self, client_updates):
         avg_update = {}
+        # Use the keys from the first client update (which now includes all keys)
         for key in client_updates[0].keys():
             stacked = torch.stack([up[key].float() for up in client_updates])
             avg_update[key] = stacked.mean(dim=0)
