@@ -7,19 +7,16 @@ import torch
 import json
 
 class HAM10000Dataset(torch.utils.data.Dataset):
-    """Custom dataset for HAM10000 skin cancer images."""
     def __init__(self, csv_file, data_dir, transform=None):
         self.data_frame = pd.read_csv(csv_file)
         self.data_dir = data_dir
         self.transform = transform
-
         mapping_file = os.path.join(data_dir, 'image_mapping.json')
         if os.path.exists(mapping_file):
             with open(mapping_file, 'r') as f:
                 self.image_mapping = json.load(f)
         else:
             self.image_mapping = {}
-
         self.label_map = {
             'akiec': 0, 'bcc': 1, 'bkl': 2, 'df': 3,
             'mel': 4, 'nv': 5, 'vasc': 6
@@ -32,7 +29,6 @@ class HAM10000Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_name = str(self.data_frame.iloc[idx]['image_id'])
         img_name_clean = img_name.replace('.jpg', '').replace('.JPG', '')
-
         image_path = self._find_image(img_name_clean, img_name)
         if image_path is None:
             image = Image.new('RGB', (28, 28), color='gray')
@@ -41,10 +37,8 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                 image = Image.open(image_path).convert('RGB')
             except:
                 image = Image.new('RGB', (28, 28), color='gray')
-
         label_str = self.data_frame.iloc[idx]['dx']
         label = self.label_map[label_str]
-
         if self.transform:
             image = self.transform(image)
         return image, label
@@ -52,13 +46,11 @@ class HAM10000Dataset(torch.utils.data.Dataset):
     def _find_image(self, img_name_clean, img_name_original):
         if img_name_clean in self.path_cache:
             return self.path_cache[img_name_clean]
-
         if img_name_clean in self.image_mapping:
             path = self.image_mapping[img_name_clean]
             if os.path.exists(path):
                 self.path_cache[img_name_clean] = path
                 return path
-
         possible_dirs = [
             os.path.join(self.data_dir, 'HAM10000_images_part_1'),
             os.path.join(self.data_dir, 'HAM10000_images_part_2'),
@@ -116,5 +108,4 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/s
 
     return client_loaders, test_loader
 
-# Alias for backward compatibility
-get_mnist_dataloaders = get_skin_cancer_dataloaders
+get_mnist_dataloaders = get_skin_cancer_dataloaders  # alias

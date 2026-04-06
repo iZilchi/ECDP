@@ -8,7 +8,6 @@ class DifferentialPrivacy:
         self.clip_norm = clip_norm
 
     def calculate_noise_scale(self):
-        """Eq. 5: σ = C · √(2·ln(1.25/δ)) / ε"""
         return self.clip_norm * np.sqrt(2 * np.log(1.25 / self.delta)) / self.epsilon
 
     def clip_update(self, update):
