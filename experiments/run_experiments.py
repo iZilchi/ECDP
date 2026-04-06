@@ -23,7 +23,7 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
-                   c=2.5, alpha=0.8, seed=42, plot=True):
+                   c=2.5, alpha=0.8, seed=42, plot=True, iid=True, dirichlet_alpha=0.5):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -31,12 +31,14 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, seed={seed}")
+    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, seed={seed}, distribution={dist_type}")
     print('='*60)
 
     set_seed(seed)
 
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
 
     std_fl = StandardFL(3, MediumCNN, device)
     
@@ -83,17 +85,18 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
-        plt.title(f'Convergence ({mode}={eps})')
+        plt.title(f'Convergence ({mode}={eps}, {dist_type})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_{mode}_{eps}_seed{seed}.png', dpi=150)
+        plt.savefig(f'results/convergence_{mode}_{eps}_seed{seed}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
         plt.show()
 
     return metrics, histories, test_loader, round_times
 
 def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
-                   num_trials=10, device='cpu', c=2.5, alpha=0.8, base_seed=42):
+                   num_trials=10, device='cpu', c=2.5, alpha=0.8, base_seed=42,
+                   iid=True, dirichlet_alpha=0.5):
     print("\n" + "="*70)
     print("STATISTICAL VALIDATION (10 independent runs)")
     if per_round_epsilon is not None:
@@ -102,7 +105,8 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}")
+    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
+    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
     print("="*70)
 
     all_std_metrics = []
@@ -122,7 +126,8 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         print(f"\n--- Trial {trial+1}/{num_trials} (seed={seed}) ---")
         set_seed(seed)
 
-        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
 
         std_fl = StandardFL(3, MediumCNN, device)
         if per_round_epsilon is not None:
@@ -205,7 +210,8 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     # Inference latency (using final models from the first trial)
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
     if per_round_epsilon is not None:
         dp_fl = BasicDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm)
         ecdp_fl = ECDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
@@ -240,14 +246,15 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     os.makedirs('results', exist_ok=True)
     with open('results/validation_results.txt', 'w') as f:
-        f.write(f"Validation results for {mode}={eps}, {num_trials} trials\n")
+        f.write(f"Validation results for {mode}={eps}, {num_trials} trials, distribution={dist_type}\n")
         f.write(f"Standard FL accuracy: {aggregate(all_std_metrics, 'accuracy')[0]:.2f}±{aggregate(all_std_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"Basic DP-FL accuracy: {aggregate(all_dp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_dp_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"EC-DP-FL accuracy: {aggregate(all_ecdp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_ecdp_metrics, 'accuracy')[1]:.2f}%\n")
     print("\n✅ Validation complete. Results saved to results/validation_results.txt")
 
 def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
-                 num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8):
+                 num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8,
+                 iid=True, dirichlet_alpha=0.5):
     """Ablation study: DP only, DP+EVC, DP+AGS, full ECDP-FL."""
     print("\n" + "="*70)
     print("ABLATION STUDY")
@@ -257,11 +264,13 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     else:
         mode = "total ε"
         eps = target_epsilon
-    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}")
+    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
+    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
     print("="*70)
 
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
     metrics_calc = ComprehensiveMetrics()
 
     configs = [
@@ -300,7 +309,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
 
     os.makedirs('results', exist_ok=True)
     with open('results/ablation_results.txt', 'w') as f:
-        f.write("Ablation Study Results\n")
+        f.write(f"Ablation Study Results (distribution={dist_type})\n")
         f.write("="*60 + "\n")
         for name, met in results.items():
             total_time = sum(round_times[name])
@@ -314,14 +323,15 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     print("\n✅ Ablation results saved to results/ablation_results.txt")
 
 def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
-                           c_values=[1.5, 2.0, 2.5], alpha_values=[0.6, 0.7, 0.8], seed=42):
+                           c_values=[1.5, 2.0, 2.5], alpha_values=[0.6, 0.7, 0.8], seed=42,
+                           iid=True, dirichlet_alpha=0.5):
     best_acc = -1
     best_params = {}
     for c in c_values:
         for alpha in alpha_values:
             print(f"\n--- Testing c={c}, α={alpha} ---")
             _, histories, _, _ = run_comparison(per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
-                                                 c, alpha, seed=seed, plot=False)
+                                                c, alpha, seed=seed, plot=False, iid=iid, dirichlet_alpha=dirichlet_alpha)
             acc = histories['EC-DP-FL'][-1]
             print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
             if acc > best_acc:
@@ -330,9 +340,12 @@ def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_nor
     print(f"\nBest params: {best_params} with accuracy {best_acc:.2f}%")
     return best_params
 
-def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_seed=42, mode='per_round'):
+def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_seed=42, mode='per_round',
+                 iid=True, dirichlet_alpha=0.5):
     print("\n" + "="*70)
     print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε)")
+    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
+    print(f"Distribution: {dist_type}")
     print("="*70)
 
     basic_accs = []
@@ -341,7 +354,8 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
     for eps in epsilon_values:
         print(f"\n--- {mode} ε = {eps} ---")
         set_seed(base_seed)
-        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
 
         if eps <= 0.5:
             c, alpha = 1.5, 0.6
@@ -370,7 +384,8 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
     plt.plot(epsilon_values, basic_accs, marker='o', label='Basic DP-FL')
     plt.plot(epsilon_values, ecdp_accs, marker='s', label='EC-DP-FL')
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=3)
+    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
     std_fl = StandardFL(3, MediumCNN, device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
@@ -379,11 +394,11 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
     plt.xscale('log')
     plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
-    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε)')
+    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε, {dist_type})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{mode}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
     plt.show()
 
 if __name__ == '__main__':
@@ -398,6 +413,8 @@ if __name__ == '__main__':
     parser.add_argument('--c', type=float, default=2.5)
     parser.add_argument('--alpha', type=float, default=0.8)
     parser.add_argument('--trials', type=int, default=10)
+    parser.add_argument('--non_iid', action='store_true', help='Use non-IID data distribution (Dirichlet)')
+    parser.add_argument('--dirichlet_alpha', type=float, default=0.5, help='Dirichlet concentration (lower = more heterogeneous)')
     args = parser.parse_args()
 
     if args.device == 'cuda' and torch.cuda.is_available():
@@ -409,18 +426,25 @@ if __name__ == '__main__':
         assert (args.per_round_epsilon is not None) ^ (args.target_epsilon is not None), \
             "Exactly one of --per_round_epsilon or --target_epsilon must be provided."
 
+    iid = not args.non_iid
+    dirichlet_alpha = args.dirichlet_alpha
+
     if args.mode == 'comparison':
         run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                       args.c, args.alpha, seed=args.seed)
+                       args.c, args.alpha, seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha)
     elif args.mode == 'tradeoff':
         print("Tradeoff mode uses per‑round epsilon. (Modify code for total epsilon if needed.)")
         epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
-        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device, base_seed=args.seed, mode='per_round')
+        run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device, base_seed=args.seed, mode='per_round',
+                     iid=iid, dirichlet_alpha=dirichlet_alpha)
     elif args.mode == 'tune':
-        tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device, seed=args.seed)
+        tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
+                               seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha)
     elif args.mode == 'validation':
         run_validation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
-                       args.trials, device, args.c, args.alpha, base_seed=args.seed)
+                       args.trials, device, args.c, args.alpha, base_seed=args.seed,
+                       iid=iid, dirichlet_alpha=dirichlet_alpha)
     elif args.mode == 'ablation':
         run_ablation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
-                     device, base_seed=args.seed, c=args.c, alpha=args.alpha)
+                     device, base_seed=args.seed, c=args.c, alpha=args.alpha,
+                     iid=iid, dirichlet_alpha=dirichlet_alpha)

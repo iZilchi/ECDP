@@ -5,18 +5,22 @@ from PIL import Image
 import os
 import torch
 import json
+import numpy as np
 
 class HAM10000Dataset(torch.utils.data.Dataset):
+    """Custom dataset for HAM10000 skin cancer images."""
     def __init__(self, csv_file, data_dir, transform=None):
         self.data_frame = pd.read_csv(csv_file)
         self.data_dir = data_dir
         self.transform = transform
+
         mapping_file = os.path.join(data_dir, 'image_mapping.json')
         if os.path.exists(mapping_file):
             with open(mapping_file, 'r') as f:
                 self.image_mapping = json.load(f)
         else:
             self.image_mapping = {}
+
         self.label_map = {
             'akiec': 0, 'bcc': 1, 'bkl': 2, 'df': 3,
             'mel': 4, 'nv': 5, 'vasc': 6
@@ -29,6 +33,7 @@ class HAM10000Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_name = str(self.data_frame.iloc[idx]['image_id'])
         img_name_clean = img_name.replace('.jpg', '').replace('.JPG', '')
+
         image_path = self._find_image(img_name_clean, img_name)
         if image_path is None:
             image = Image.new('RGB', (28, 28), color='gray')
@@ -37,8 +42,10 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                 image = Image.open(image_path).convert('RGB')
             except:
                 image = Image.new('RGB', (28, 28), color='gray')
+
         label_str = self.data_frame.iloc[idx]['dx']
         label = self.label_map[label_str]
+
         if self.transform:
             image = self.transform(image)
         return image, label
@@ -46,11 +53,13 @@ class HAM10000Dataset(torch.utils.data.Dataset):
     def _find_image(self, img_name_clean, img_name_original):
         if img_name_clean in self.path_cache:
             return self.path_cache[img_name_clean]
+
         if img_name_clean in self.image_mapping:
             path = self.image_mapping[img_name_clean]
             if os.path.exists(path):
                 self.path_cache[img_name_clean] = path
                 return path
+
         possible_dirs = [
             os.path.join(self.data_dir, 'HAM10000_images_part_1'),
             os.path.join(self.data_dir, 'HAM10000_images_part_2'),
@@ -71,7 +80,19 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                     return potential2
         return None
 
-def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/skin_cancer'):
+def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/skin_cancer',
+                                iid=True, dirichlet_alpha=0.5, seed=42):
+    """
+    Create federated dataloaders with IID or non-IID (Dirichlet) partitioning.
+
+    Args:
+        num_clients: number of clients
+        batch_size: batch size for each client
+        data_dir: path to dataset
+        iid: if True, split data evenly (IID). If False, use Dirichlet distribution for non-IID.
+        dirichlet_alpha: concentration parameter (lower = more heterogeneous)
+        seed: random seed for reproducibility
+    """
     transform = transforms.Compose([
         transforms.Resize((28, 28)),
         transforms.RandomHorizontalFlip(),
@@ -91,21 +112,60 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/s
     train_dataset = HAM10000Dataset(train_csv, data_dir, transform=transform)
     test_dataset = HAM10000Dataset(test_csv, data_dir, transform=test_transform)
 
-    total_samples = len(train_dataset)
-    samples_per_client = total_samples // num_clients
-    client_datasets = []
-    for i in range(num_clients):
-        start = i * samples_per_client
-        end = start + samples_per_client if i < num_clients - 1 else total_samples
-        client_datasets.append(Subset(train_dataset, range(start, end)))
+    # Get labels for all training samples
+    labels = [train_dataset[i][1] for i in range(len(train_dataset))]
+    labels = np.array(labels)
 
+    if iid:
+        # IID: split sequentially (data will be shuffled by DataLoader later)
+        total_samples = len(train_dataset)
+        samples_per_client = total_samples // num_clients
+        client_indices = []
+        for i in range(num_clients):
+            start = i * samples_per_client
+            end = start + samples_per_client if i < num_clients - 1 else total_samples
+            client_indices.append(list(range(start, end)))
+    else:
+        # Non-IID: Dirichlet distribution over classes
+        np.random.seed(seed)
+        num_classes = 7
+        client_indices = [[] for _ in range(num_clients)]
+
+        # For each class, split samples among clients using Dirichlet
+        for class_id in range(num_classes):
+            class_indices = np.where(labels == class_id)[0]
+            if len(class_indices) == 0:
+                continue
+            # Draw proportions from Dirichlet
+            proportions = np.random.dirichlet([dirichlet_alpha] * num_clients)
+            # Assign samples to clients based on proportions
+            assigned = np.array_split(class_indices,
+                                      np.cumsum((proportions * len(class_indices)).astype(int))[:-1])
+            for client_id, indices in enumerate(assigned):
+                client_indices[client_id].extend(indices.tolist())
+
+        # Shuffle each client's indices to avoid order bias
+        for i in range(num_clients):
+            np.random.shuffle(client_indices[i])
+
+    # Create Subset datasets and loaders
+    client_datasets = [Subset(train_dataset, indices) for indices in client_indices]
     client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True) for ds in client_datasets]
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    print(f"✅ Created {num_clients} clients with ~{samples_per_client} samples each")
-    print(f"📚 Total training samples: {total_samples}")
-    print(f"🧪 Test samples: {len(test_dataset)}\n")
+    # Print distribution summary
+    print(f"✅ Created {num_clients} clients with {'IID' if iid else f'non-IID (α={dirichlet_alpha})'} distribution")
+    print(f"📚 Total training samples: {len(train_dataset)}")
+    print(f"🧪 Test samples: {len(test_dataset)}")
+    if not iid:
+        print("Class distribution per client (class counts):")
+        for i, indices in enumerate(client_indices):
+            client_labels = [labels[idx] for idx in indices]
+            unique, counts = np.unique(client_labels, return_counts=True)
+            dist = dict(zip(unique, counts))
+            print(f"  Client {i+1}: {dist}")
 
     return client_loaders, test_loader
 
-get_mnist_dataloaders = get_skin_cancer_dataloaders  # alias
+# Alias for backward compatibility
+get_mnist_dataloaders = get_skin_cancer_dataloaders
