@@ -8,7 +8,9 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
+from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
+from models.chest_cnn import ChestCNN
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import ComprehensiveMetrics, SystemMetrics, compare_methods_comprehensive
@@ -23,7 +25,7 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
-                   c=2.5, alpha=0.8, seed=42, plot=True, iid=True, dirichlet_alpha=0.5):
+                   c=2.5, alpha=0.8, seed=42, plot=True, iid=True, dirichlet_alpha=0.5, dataset='skin'):
     print(f"\n{'='*60}")
     if per_round_epsilon is not None:
         mode = "per‑round ε"
@@ -32,29 +34,37 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         mode = "total ε"
         eps = target_epsilon
     dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
-    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, clip_norm={clip_norm}, c={c}, α={alpha}, seed={seed}, distribution={dist_type}")
+    print(f"COMPARISON: {mode}={eps} over {num_rounds} rounds, dataset={dataset}, clip_norm={clip_norm}, c={c}, α={alpha}, seed={seed}, distribution={dist_type}")
     print('='*60)
 
     set_seed(seed)
 
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+    if dataset == 'skin':
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+        model_class = MediumCNN
+        num_classes = 7
+    else:
+        client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+        model_class = ChestCNN
+        num_classes = 2
 
-    std_fl = StandardFL(3, MediumCNN, device)
+    std_fl = StandardFL(3, lambda: model_class(num_classes=num_classes), device)
     
     if per_round_epsilon is not None:
-        dp_fl = BasicDPFL(3, MediumCNN, device,
+        dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
                           epsilon=per_round_epsilon,
                           clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, MediumCNN, device,
+        ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
                          epsilon=per_round_epsilon,
                          clip_norm=clip_norm,
                          c=c, alpha=alpha)
     else:
-        dp_fl = BasicDPFL(3, MediumCNN, device,
+        dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
                           epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                           clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, MediumCNN, device,
+        ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
                          epsilon=None, target_epsilon=target_epsilon, max_rounds=num_rounds,
                          clip_norm=clip_norm,
                          c=c, alpha=alpha)
@@ -85,18 +95,18 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
             plt.plot(range(1, len(acc)+1), acc, marker='o', label=name)
         plt.xlabel('Federation Round')
         plt.ylabel('Accuracy (%)')
-        plt.title(f'Convergence ({mode}={eps}, {dist_type})')
+        plt.title(f'Convergence ({mode}={eps}, {dist_type}, dataset={dataset})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         os.makedirs('results', exist_ok=True)
-        plt.savefig(f'results/convergence_{mode}_{eps}_seed{seed}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
+        plt.savefig(f'results/convergence_{mode}_{eps}_{dataset}_seed{seed}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
         plt.show()
 
     return metrics, histories, test_loader, round_times
 
 def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
                    num_trials=10, device='cpu', c=2.5, alpha=0.8, base_seed=42,
-                   iid=True, dirichlet_alpha=0.5):
+                   iid=True, dirichlet_alpha=0.5, dataset='skin'):
     print("\n" + "="*70)
     print("STATISTICAL VALIDATION (10 independent runs)")
     if per_round_epsilon is not None:
@@ -106,7 +116,7 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         mode = "total ε"
         eps = target_epsilon
     dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
-    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
+    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, dataset={dataset}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
     print("="*70)
 
     all_std_metrics = []
@@ -119,24 +129,34 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
     all_dp_round_times = []
     all_ecdp_round_times = []
 
-    sample_input = torch.randn(1, 3, 28, 28)
-
     for trial in range(num_trials):
         seed = base_seed + trial
         print(f"\n--- Trial {trial+1}/{num_trials} (seed={seed}) ---")
         set_seed(seed)
 
-        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
-
-        std_fl = StandardFL(3, MediumCNN, device)
-        if per_round_epsilon is not None:
-            dp_fl = BasicDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm)
-            ecdp_fl = ECDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
+        if dataset == 'skin':
+            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                      iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+            model_class = MediumCNN
+            num_classes = 7
         else:
-            dp_fl = BasicDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=target_epsilon,
+            client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                     iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+            model_class = ChestCNN
+            num_classes = 2
+
+        std_fl = StandardFL(3, lambda: model_class(num_classes=num_classes), device)
+        if per_round_epsilon is not None:
+            dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                              epsilon=per_round_epsilon, clip_norm=clip_norm)
+            ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                             epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
+        else:
+            dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                              epsilon=None, target_epsilon=target_epsilon,
                               max_rounds=num_rounds, clip_norm=clip_norm)
-            ecdp_fl = ECDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=target_epsilon,
+            ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                             epsilon=None, target_epsilon=target_epsilon,
                              max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
 
         # Train Standard FL
@@ -166,10 +186,10 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         all_ecdp_history.append(ecdp_acc_history)
         all_ecdp_round_times.append(ecdp_fl.round_times)
 
-        metrics = ComprehensiveMetrics()
-        all_std_metrics.append(metrics.compute_all_metrics(std_fl.global_model, test_loader, device))
-        all_dp_metrics.append(metrics.compute_all_metrics(dp_fl.global_model, test_loader, device))
-        all_ecdp_metrics.append(metrics.compute_all_metrics(ecdp_fl.global_model, test_loader, device))
+        metrics_calc = ComprehensiveMetrics(num_classes=num_classes)
+        all_std_metrics.append(metrics_calc.compute_all_metrics(std_fl.global_model, test_loader, device))
+        all_dp_metrics.append(metrics_calc.compute_all_metrics(dp_fl.global_model, test_loader, device))
+        all_ecdp_metrics.append(metrics_calc.compute_all_metrics(ecdp_fl.global_model, test_loader, device))
 
     def aggregate(metric_list, key):
         values = [m[key] for m in metric_list]
@@ -208,24 +228,37 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
     print(f"  Basic DP-FL: {np.mean(conv_dp):.1f} ± {np.std(conv_dp):.1f} rounds")
     print(f"  EC-DP-FL:    {np.mean(conv_ecdp):.1f} ± {np.std(conv_ecdp):.1f} rounds")
 
-    # Inference latency (using final models from the first trial)
+    # Inference latency using final models from first trial
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-    if per_round_epsilon is not None:
-        dp_fl = BasicDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, MediumCNN, device, epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
+    if dataset == 'skin':
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = MediumCNN
+        num_classes = 7
     else:
-        dp_fl = BasicDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=target_epsilon,
+        client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = ChestCNN
+        num_classes = 2
+
+    if per_round_epsilon is not None:
+        dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                          epsilon=per_round_epsilon, clip_norm=clip_norm)
+        ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                         epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
+    else:
+        dp_fl = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                          epsilon=None, target_epsilon=target_epsilon,
                           max_rounds=num_rounds, clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=target_epsilon,
+        ecdp_fl = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                         epsilon=None, target_epsilon=target_epsilon,
                          max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
-    std_fl = StandardFL(3, MediumCNN, device)
+    std_fl = StandardFL(3, lambda: model_class(num_classes=num_classes), device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
         dp_fl.train_round(client_loaders, epochs=2)
         ecdp_fl.train_round(client_loaders, epochs=2)
-    sample_input = torch.randn(1, 3, 28, 28)
+    sample_input = torch.randn(1, 3, 224, 224)
     std_lat = sys_metrics.measure_inference_latency(std_fl.global_model, sample_input, device)
     dp_lat = sys_metrics.measure_inference_latency(dp_fl.global_model, sample_input, device)
     ecdp_lat = sys_metrics.measure_inference_latency(ecdp_fl.global_model, sample_input, device)
@@ -246,7 +279,7 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     os.makedirs('results', exist_ok=True)
     with open('results/validation_results.txt', 'w') as f:
-        f.write(f"Validation results for {mode}={eps}, {num_trials} trials, distribution={dist_type}\n")
+        f.write(f"Validation results for {mode}={eps}, {num_trials} trials, dataset={dataset}, distribution={dist_type}\n")
         f.write(f"Standard FL accuracy: {aggregate(all_std_metrics, 'accuracy')[0]:.2f}±{aggregate(all_std_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"Basic DP-FL accuracy: {aggregate(all_dp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_dp_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"EC-DP-FL accuracy: {aggregate(all_ecdp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_ecdp_metrics, 'accuracy')[1]:.2f}%\n")
@@ -254,7 +287,7 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
 def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                  num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8,
-                 iid=True, dirichlet_alpha=0.5):
+                 iid=True, dirichlet_alpha=0.5, dataset='skin'):
     """Ablation study: DP only, DP+EVC, DP+AGS, full ECDP-FL."""
     print("\n" + "="*70)
     print("ABLATION STUDY")
@@ -265,13 +298,22 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
         mode = "total ε"
         eps = target_epsilon
     dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
-    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
+    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, dataset={dataset}, clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
     print("="*70)
 
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-    metrics_calc = ComprehensiveMetrics()
+    if dataset == 'skin':
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = MediumCNN
+        num_classes = 7
+    else:
+        client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = ChestCNN
+        num_classes = 2
+
+    metrics_calc = ComprehensiveMetrics(num_classes=num_classes)
 
     configs = [
         ("Standard FL", False, False, False),
@@ -286,14 +328,16 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
     for name, use_dp, use_evc, use_ags in configs:
         print(f"\n--- Running: {name} ---")
         if not use_dp:
-            model = StandardFL(3, MediumCNN, device)
+            model = StandardFL(3, lambda: model_class(num_classes=num_classes), device)
         else:
             if per_round_epsilon is not None:
-                model = ECDPFL(3, MediumCNN, device, epsilon=per_round_epsilon,
+                model = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                               epsilon=per_round_epsilon,
                                clip_norm=clip_norm, use_evc=use_evc, use_ags=use_ags,
                                c=c, alpha=alpha)
             else:
-                model = ECDPFL(3, MediumCNN, device, epsilon=None,
+                model = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                               epsilon=None,
                                target_epsilon=target_epsilon, max_rounds=num_rounds,
                                clip_norm=clip_norm, use_evc=use_evc, use_ags=use_ags,
                                c=c, alpha=alpha)
@@ -309,7 +353,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
 
     os.makedirs('results', exist_ok=True)
     with open('results/ablation_results.txt', 'w') as f:
-        f.write(f"Ablation Study Results (distribution={dist_type})\n")
+        f.write(f"Ablation Study Results (dataset={dataset}, distribution={dist_type})\n")
         f.write("="*60 + "\n")
         for name, met in results.items():
             total_time = sum(round_times[name])
@@ -324,14 +368,15 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
 
 def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10, device='cpu',
                            c_values=[1.5, 2.0, 2.5], alpha_values=[0.6, 0.7, 0.8], seed=42,
-                           iid=True, dirichlet_alpha=0.5):
+                           iid=True, dirichlet_alpha=0.5, dataset='skin'):
     best_acc = -1
     best_params = {}
     for c in c_values:
         for alpha in alpha_values:
             print(f"\n--- Testing c={c}, α={alpha} ---")
             _, histories, _, _ = run_comparison(per_round_epsilon, target_epsilon, clip_norm, num_rounds, device,
-                                                c, alpha, seed=seed, plot=False, iid=iid, dirichlet_alpha=dirichlet_alpha)
+                                                c, alpha, seed=seed, plot=False, iid=iid,
+                                                dirichlet_alpha=dirichlet_alpha, dataset=dataset)
             acc = histories['EC-DP-FL'][-1]
             print(f"Final EC-DP-FL accuracy: {acc:.2f}%")
             if acc > best_acc:
@@ -341,11 +386,11 @@ def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_nor
     return best_params
 
 def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_seed=42, mode='per_round',
-                 iid=True, dirichlet_alpha=0.5):
+                 iid=True, dirichlet_alpha=0.5, dataset='skin'):
     print("\n" + "="*70)
     print(f"PRIVACY‑UTILITY TRADEOFF ANALYSIS ({mode} ε)")
     dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
-    print(f"Distribution: {dist_type}")
+    print(f"Dataset: {dataset}, Distribution: {dist_type}")
     print("="*70)
 
     basic_accs = []
@@ -354,8 +399,16 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
     for eps in epsilon_values:
         print(f"\n--- {mode} ε = {eps} ---")
         set_seed(base_seed)
-        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        if dataset == 'skin':
+            client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                      iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+            model_class = MediumCNN
+            num_classes = 7
+        else:
+            client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                     iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+            model_class = ChestCNN
+            num_classes = 2
 
         if eps <= 0.5:
             c, alpha = 1.5, 0.6
@@ -363,11 +416,15 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
             c, alpha = 2.5, 0.8
 
         if mode == 'per_round':
-            dp = BasicDPFL(3, MediumCNN, device, epsilon=eps, clip_norm=clip_norm)
-            ec = ECDPFL(3, MediumCNN, device, epsilon=eps, clip_norm=clip_norm, c=c, alpha=alpha)
+            dp = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                           epsilon=eps, clip_norm=clip_norm)
+            ec = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                        epsilon=eps, clip_norm=clip_norm, c=c, alpha=alpha)
         else:
-            dp = BasicDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=eps, max_rounds=num_rounds, clip_norm=clip_norm)
-            ec = ECDPFL(3, MediumCNN, device, epsilon=None, target_epsilon=eps, max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
+            dp = BasicDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                           epsilon=None, target_epsilon=eps, max_rounds=num_rounds, clip_norm=clip_norm)
+            ec = ECDPFL(3, lambda: model_class(num_classes=num_classes), device,
+                        epsilon=None, target_epsilon=eps, max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
 
         for r in range(num_rounds):
             dp.train_round(client_loaders, epochs=2)
@@ -380,30 +437,41 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
         print(f"  Basic DP: {basic_acc:.2f}%")
         print(f"  EC-DP:    {ecdp_acc:.2f}%")
 
-    plt.figure(figsize=(10,6))
-    plt.plot(epsilon_values, basic_accs, marker='o', label='Basic DP-FL')
-    plt.plot(epsilon_values, ecdp_accs, marker='s', label='EC-DP-FL')
+    # Get Standard FL baseline
     set_seed(base_seed)
-    client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
-                                                              iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-    std_fl = StandardFL(3, MediumCNN, device)
+    if dataset == 'skin':
+        client_loaders, test_loader = get_skin_cancer_dataloaders(num_clients=10, batch_size=64,
+                                                                  iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = MediumCNN
+        num_classes = 7
+    else:
+        client_loaders, test_loader = get_chest_xray_dataloaders(num_clients=10, batch_size=64,
+                                                                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = ChestCNN
+        num_classes = 2
+    std_fl = StandardFL(3, lambda: model_class(num_classes=num_classes), device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
     std_acc = std_fl.test_accuracy(test_loader)
+
+    plt.figure(figsize=(10,6))
+    plt.plot(epsilon_values, basic_accs, marker='o', label='Basic DP-FL')
+    plt.plot(epsilon_values, ecdp_accs, marker='s', label='EC-DP-FL')
     plt.axhline(y=std_acc, color='g', linestyle='--', label='Standard FL')
     plt.xscale('log')
     plt.xlabel(f'Privacy budget ε ({mode})')
     plt.ylabel('Accuracy (%)')
-    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε, {dist_type})')
+    plt.title(f'Privacy‑Utility Tradeoff ({mode} ε, {dataset}, {dist_type})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     os.makedirs('results', exist_ok=True)
-    plt.savefig(f'results/tradeoff_{mode}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
+    plt.savefig(f'results/tradeoff_{mode}_{dataset}_{"IID" if iid else f"nonIID_alpha{dirichlet_alpha}"}.png', dpi=150)
     plt.show()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune', 'validation', 'ablation'], default='comparison')
+    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin', help='Dataset to use')
     parser.add_argument('--per_round_epsilon', type=float, default=None)
     parser.add_argument('--target_epsilon', type=float, default=None)
     parser.add_argument('--clip_norm', type=float, default=2.3)
@@ -431,20 +499,19 @@ if __name__ == '__main__':
 
     if args.mode == 'comparison':
         run_comparison(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                       args.c, args.alpha, seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha)
+                       args.c, args.alpha, seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha, dataset=args.dataset)
     elif args.mode == 'tradeoff':
-        print("Tradeoff mode uses per‑round epsilon. (Modify code for total epsilon if needed.)")
         epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device, base_seed=args.seed, mode='per_round',
-                     iid=iid, dirichlet_alpha=dirichlet_alpha)
+                     iid=iid, dirichlet_alpha=dirichlet_alpha, dataset=args.dataset)
     elif args.mode == 'tune':
         tune_correction_params(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds, device,
-                               seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha)
+                               seed=args.seed, iid=iid, dirichlet_alpha=dirichlet_alpha, dataset=args.dataset)
     elif args.mode == 'validation':
         run_validation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
                        args.trials, device, args.c, args.alpha, base_seed=args.seed,
-                       iid=iid, dirichlet_alpha=dirichlet_alpha)
+                       iid=iid, dirichlet_alpha=dirichlet_alpha, dataset=args.dataset)
     elif args.mode == 'ablation':
         run_ablation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
                      device, base_seed=args.seed, c=args.c, alpha=args.alpha,
-                     iid=iid, dirichlet_alpha=dirichlet_alpha)
+                     iid=iid, dirichlet_alpha=dirichlet_alpha, dataset=args.dataset)

@@ -1,7 +1,6 @@
 """
 Analyze model update norms after local training.
-This helps calibrate the clipping norm (C) for differential privacy.
-Now uses the MediumCNN model.
+Now supports both skin (HAM10000) and chest X-ray datasets.
 """
 import sys
 import os
@@ -9,24 +8,35 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import torch
 import numpy as np
+import argparse
 from utils.data_loader import get_skin_cancer_dataloaders
+from utils.chest_xray_loader import get_chest_xray_dataloaders
 from models.medium_cnn import MediumCNN
+from models.chest_cnn import ChestCNN
 
-def analyze_update_norms(num_clients=3, epochs=2, batches=40):
+def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
     print("="*70)
-    print("🔬 UPDATE NORM ANALYSIS FOR HAM10000 (MediumCNN)")
+    print(f"🔬 UPDATE NORM ANALYSIS FOR {dataset.upper()} (CNN)")
     print("="*70)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    client_loaders, _ = get_skin_cancer_dataloaders(num_clients=num_clients, batch_size=64)
+    
+    if dataset == 'skin':
+        client_loaders, _ = get_skin_cancer_dataloaders(num_clients=num_clients, batch_size=64)
+        model_class = MediumCNN
+        num_classes = 7
+    else:
+        client_loaders, _ = get_chest_xray_dataloaders(num_clients=num_clients, batch_size=64)
+        model_class = ChestCNN
+        num_classes = 2
 
     update_norms = []
 
     for client_idx, loader in enumerate(client_loaders):
         print(f"\n📊 Client {client_idx+1}")
-        model = MediumCNN().to(device)
+        model = model_class(num_classes=num_classes).to(device)
         criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
         initial_weights = {k: v.clone() for k, v in model.state_dict().items()}
 
@@ -91,5 +101,8 @@ def analyze_update_norms(num_clients=3, epochs=2, batches=40):
     }
 
 if __name__ == "__main__":
-    stats = analyze_update_norms()
-    print(f"\n💾 Use clip_norm = {stats['suggested']:.1f} in your experiments")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin')
+    args = parser.parse_args()
+    stats = analyze_update_norms(dataset=args.dataset)
+    print(f"\n💾 Use clip_norm = {stats['suggested']:.1f} for {args.dataset} dataset")
