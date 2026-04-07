@@ -116,33 +116,45 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/s
     labels = [train_dataset[i][1] for i in range(len(train_dataset))]
     labels = np.array(labels)
 
+    # CRITICAL FIX: Shuffle all indices first to ensure IID split is truly random
+    np.random.seed(seed)
+    all_indices = np.random.permutation(len(train_dataset))
+
     if iid:
-        # IID: split sequentially (data will be shuffled by DataLoader later)
-        total_samples = len(train_dataset)
-        samples_per_client = total_samples // num_clients
+        # IID: split shuffled indices evenly
+        samples_per_client = len(train_dataset) // num_clients
         client_indices = []
         for i in range(num_clients):
             start = i * samples_per_client
-            end = start + samples_per_client if i < num_clients - 1 else total_samples
-            client_indices.append(list(range(start, end)))
+            end = start + samples_per_client if i < num_clients - 1 else len(train_dataset)
+            client_indices.append(all_indices[start:end].tolist())
     else:
-        # Non-IID: Dirichlet distribution over classes
+        # Non-IID: Dirichlet distribution over classes using shuffled indices
         np.random.seed(seed)
         num_classes = 7
         client_indices = [[] for _ in range(num_clients)]
 
         # For each class, split samples among clients using Dirichlet
         for class_id in range(num_classes):
-            class_indices = np.where(labels == class_id)[0]
+            # Get indices of this class from the SHUFFLED list
+            class_mask = (labels[all_indices] == class_id)
+            class_indices = all_indices[class_mask]
+
             if len(class_indices) == 0:
                 continue
+
             # Draw proportions from Dirichlet
             proportions = np.random.dirichlet([dirichlet_alpha] * num_clients)
-            # Assign samples to clients based on proportions
-            assigned = np.array_split(class_indices,
-                                      np.cumsum((proportions * len(class_indices)).astype(int))[:-1])
-            for client_id, indices in enumerate(assigned):
-                client_indices[client_id].extend(indices.tolist())
+            # Calculate split sizes
+            split_sizes = (proportions * len(class_indices)).astype(int)
+            # Ensure sum matches exactly
+            split_sizes[-1] = len(class_indices) - sum(split_sizes[:-1])
+
+            start = 0
+            for client_id, size in enumerate(split_sizes):
+                if size > 0:
+                    client_indices[client_id].extend(class_indices[start:start + size].tolist())
+                start += size
 
         # Shuffle each client's indices to avoid order bias
         for i in range(num_clients):
