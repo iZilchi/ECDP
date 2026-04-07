@@ -103,6 +103,8 @@ def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin')
+    parser.add_argument('--clients', type=int, default=10,
+                        help='Number of simulated clients (default: 10)')
     args = parser.parse_args()
-    stats = analyze_update_norms(dataset=args.dataset)
+    stats = analyze_update_norms(num_clients=args.clients, dataset=args.dataset)
     print(f"\n💾 Use clip_norm = {stats['suggested']:.1f} for {args.dataset} dataset")

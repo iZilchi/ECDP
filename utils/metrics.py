@@ -1,4 +1,5 @@
 import torch
+import os
 import numpy as np
 import time
 from sklearn.metrics import (
@@ -10,11 +11,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 class ComprehensiveMetrics:
-    def __init__(self, num_classes=7, class_names=None):
+    def __init__(self, num_classes=None, class_names=None):
+        """
+        num_classes: if None, will be inferred from data when needed.
+        class_names: if None, generic names 'Class 0', 'Class 1', ... are used.
+        """
         self.num_classes = num_classes
-        self.class_names = class_names or [
-            'akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc'
-        ]
+        self.class_names = class_names
+    
+    def _get_class_names(self, targets, predictions):
+        """Determine class names based on actual labels present."""
+        unique_labels = np.unique(np.concatenate([targets, predictions]))
+        if self.class_names is not None and len(self.class_names) == len(unique_labels):
+            return self.class_names
+        else:
+            return [f'Class {i}' for i in sorted(unique_labels)]
     
     def compute_all_metrics(self, model, test_loader, device):
         model.eval()
@@ -35,6 +46,10 @@ class ComprehensiveMetrics:
         all_preds = np.array(all_preds)
         all_targets = np.array(all_targets)
         all_probs = np.array(all_probs)
+        
+        # Update num_classes if not set
+        if self.num_classes is None:
+            self.num_classes = len(np.unique(all_targets))
         
         accuracy = accuracy_score(all_targets, all_preds) * 100
         precision = precision_score(all_targets, all_preds, average='weighted', zero_division=0) * 100
@@ -69,10 +84,11 @@ class ComprehensiveMetrics:
         print(f"{'='*60}\n")
     
     def plot_confusion_matrix(self, conf_matrix, title, save_path=None):
+        class_names = self._get_class_names(np.arange(conf_matrix.shape[0]), np.arange(conf_matrix.shape[1]))
         plt.figure(figsize=(10, 8))
         sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues',
-                   xticklabels=self.class_names,
-                   yticklabels=self.class_names)
+                   xticklabels=class_names,
+                   yticklabels=class_names)
         plt.title(f'Confusion Matrix: {title}')
         plt.ylabel('True Label')
         plt.xlabel('Predicted Label')
@@ -83,7 +99,11 @@ class ComprehensiveMetrics:
         return plt.gcf()
     
     def generate_classification_report(self, targets, predictions):
-        return classification_report(targets, predictions, target_names=self.class_names, digits=3)
+        """Generate classification report with appropriate labels."""
+        unique_labels = np.unique(np.concatenate([targets, predictions]))
+        target_names = self._get_class_names(targets, predictions)
+        return classification_report(targets, predictions, labels=unique_labels,
+                                     target_names=target_names, digits=3, zero_division=0)
     
     def calculate_utility_metrics(self, std_metrics, dp_metrics, ecdp_metrics):
         improvement = ecdp_metrics['accuracy'] - dp_metrics['accuracy']
@@ -140,13 +160,19 @@ class SystemMetrics:
 
 
 def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device):
-    metrics = ComprehensiveMetrics()
+    # Determine number of classes from the first batch of test_loader
+    sample_batch = next(iter(test_loader))
+    num_classes = sample_batch[1].max().item() + 1
+    metrics = ComprehensiveMetrics(num_classes=num_classes)
+    
     std_metrics = metrics.compute_all_metrics(std_fl.global_model, test_loader, device)
     dp_metrics = metrics.compute_all_metrics(dp_fl.global_model, test_loader, device)
     ecdp_metrics = metrics.compute_all_metrics(ecdp_fl.global_model, test_loader, device)
+    
     metrics.print_metrics_table(std_metrics, "Standard FL")
     metrics.print_metrics_table(dp_metrics, "Basic DP-FL")
     metrics.print_metrics_table(ecdp_metrics, "EC-DP-FL (Ours)")
+    
     utility = metrics.calculate_utility_metrics(std_metrics, dp_metrics, ecdp_metrics)
     print(f"\n{'='*60}")
     print(f"🎯 UTILITY ANALYSIS (Eq. 9 & 10)")
@@ -156,11 +182,16 @@ def compare_methods_comprehensive(std_fl, dp_fl, ecdp_fl, test_loader, device):
     print(f"Improvement (Eq. 9):    {utility['improvement']:>7.2f}%")
     print(f"Recovery Rate (Eq. 10): {utility['recovery_rate']:>7.1f}%")
     print(f"{'='*60}\n")
+    
+    # Plot confusion matrices
+    os.makedirs('results', exist_ok=True)
     metrics.plot_confusion_matrix(std_metrics['confusion_matrix'], "Standard FL", "results/confusion_matrix_std_fl.png")
     metrics.plot_confusion_matrix(dp_metrics['confusion_matrix'], "Basic DP-FL", "results/confusion_matrix_dp_fl.png")
     metrics.plot_confusion_matrix(ecdp_metrics['confusion_matrix'], "EC-DP-FL (Ours)", "results/confusion_matrix_ecdp_fl.png")
+    
     print("\n📋 DETAILED CLASSIFICATION REPORT - EC-DP-FL:")
     print(metrics.generate_classification_report(ecdp_metrics['targets'], ecdp_metrics['predictions']))
+    
     return {
         'standard_fl': std_metrics,
         'dp_fl': dp_metrics,
