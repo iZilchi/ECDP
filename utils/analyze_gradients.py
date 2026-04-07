@@ -36,7 +36,7 @@ def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
         print(f"\n📊 Client {client_idx+1}")
         model = model_class(num_classes=num_classes).to(device)
         criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
 
         initial_weights = {k: v.clone() for k, v in model.state_dict().items()}
 

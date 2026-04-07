@@ -57,14 +57,14 @@ def get_chest_xray_dataloaders(num_clients=3, batch_size=32, data_dir='./data/ch
     Automatically finds nested structure if needed.
     """
     transform_train = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize((32, 32)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     transform_test = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize((32, 32)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
