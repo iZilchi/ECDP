@@ -34,7 +34,7 @@ class FederatedLearningBase:
         model = self.model_class().to(self.device)
         model.load_state_dict(global_weights)
         model.train()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         criterion = torch.nn.CrossEntropyLoss()
 
         for _ in range(epochs):
