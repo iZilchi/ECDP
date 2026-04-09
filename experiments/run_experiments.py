@@ -522,7 +522,7 @@ if __name__ == '__main__':
                        args.c, args.alpha, seed=args.seed, iid=iid,
                        dirichlet_alpha=dirichlet_alpha, dataset=args.dataset, num_clients=args.clients)
     elif args.mode == 'tradeoff':
-        epsilon_list = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+        epsilon_list = [0.1, 1.0, 2.0]
         run_tradeoff(epsilon_list, args.clip_norm, args.rounds, device, base_seed=args.seed,
                      mode='per_round', iid=iid, dirichlet_alpha=dirichlet_alpha,
                      dataset=args.dataset, num_clients=args.clients)
