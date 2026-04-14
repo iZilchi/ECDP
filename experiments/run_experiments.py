@@ -359,7 +359,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
         metrics_calc.print_metrics_table(met, name)
 
     os.makedirs('results', exist_ok=True)
-    with open('results/ablation_results.txt', 'w') as f:
+    with open('results/ablation_results.txt', 'w', encoding='utf-8') as f:
         f.write(f"Ablation Study Results (dataset={dataset}, distribution={dist_type})\n")
         f.write("="*60 + "\n")
         for name, met in results.items():
