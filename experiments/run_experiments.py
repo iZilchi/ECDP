@@ -293,7 +293,117 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         f.write(f"EC-DP-FL accuracy: {aggregate(all_ecdp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_ecdp_metrics, 'accuracy')[1]:.2f}%\n")
     print("\n✅ Validation complete. Results saved to results/validation_results.txt")
 
-def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
+def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=0.5, num_rounds=10,
+                 device='cpu', base_seed=42, c=1.5, alpha=0.8,
+                 iid=True, dirichlet_alpha=0.5, dataset='chest', num_clients=10):
+    """
+    Ablation study with IDENTICAL data partitions for all configurations.
+    Fixes the previous bug where each config got different client splits.
+    """
+    print("\n" + "="*70)
+    print("ABLATION STUDY (Fixed: same data partition for all configs)")
+    if per_round_epsilon is not None:
+        mode = "per‑round ε"
+        eps = per_round_epsilon
+    else:
+        mode = "total ε"
+        eps = target_epsilon
+    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
+    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, dataset={dataset}, clients={num_clients}, "
+          f"clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
+    print("="*70)
+
+    # Set seed once
+    set_seed(base_seed)
+
+    # Load data ONCE – reused for all configurations
+    if dataset == 'pneumonia':
+        client_loaders, test_loader = get_pneumoniamnist_dataloaders(
+            num_clients=num_clients, batch_size=64,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = PneumoniaCNN
+        num_classes = 2
+        class_names = ['NORMAL', 'PNEUMONIA']
+    elif dataset == 'breast':
+        client_loaders, test_loader = get_breastmnist_dataloaders(
+            num_clients=num_clients, batch_size=64,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = BreastCNN
+        num_classes = 2
+        class_names = ['Benign', 'Malignant']
+    else:  # skin / chest fallback
+        # For skin, use your existing loader
+        from utils.data_loader import get_skin_cancer_dataloaders
+        client_loaders, test_loader = get_skin_cancer_dataloaders(
+            num_clients=num_clients, batch_size=64,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = MediumCNN
+        num_classes = 7
+        class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
+
+    configs = [
+        ('Standard FL', False, False, False),
+        ('DP only',      True,  False, False),
+        ('DP + EVC',     True,  True,  False),
+        ('DP + AGS',     True,  False, True),
+        ('ECDP-FL (full)', True, True, True),
+    ]
+
+    results = {}
+    round_times = {}
+
+    for name, use_dp, use_evc, use_ags in configs:
+        print(f"\n{'='*60}")
+        print(f"--- Ablation: {name} (same data partition) ---")
+        print(f"{'='*60}")
+
+        if not use_dp:
+            model = StandardFL(num_clients, lambda: model_class(num_classes=num_classes),
+                               device, num_classes=num_classes)
+        else:
+            if per_round_epsilon is not None:
+                model = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes),
+                               device, epsilon=per_round_epsilon, clip_norm=clip_norm,
+                               use_evc=use_evc, use_ags=use_ags, c=c, alpha=alpha,
+                               iid=iid, dataset_name=dataset, num_classes=num_classes)
+            else:
+                model = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes),
+                               device, epsilon=None, target_epsilon=target_epsilon,
+                               max_rounds=num_rounds, clip_norm=clip_norm,
+                               use_evc=use_evc, use_ags=use_ags, c=c, alpha=alpha,
+                               iid=iid, dataset_name=dataset, num_classes=num_classes)
+
+        # Train
+        for r in range(num_rounds):
+            model.train_round(client_loaders, epochs=2)
+
+        # Compute metrics
+        met = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
+        metrics = met.compute_all_metrics(model.global_model, test_loader, device)
+        results[name] = metrics
+        round_times[name] = model.round_times.copy()
+        total_time = sum(model.round_times)
+        avg_time = total_time / len(model.round_times)
+        print(f"Total training time: {total_time:.2f}s, avg per round: {avg_time:.2f}s")
+        met.print_metrics_table(metrics, name)
+
+    # Save results
+    os.makedirs('results', exist_ok=True)
+    with open('results/ablation_results.txt', 'w', encoding='utf-8') as f:
+        f.write(f"Ablation Study Results (dataset={dataset}, distribution={dist_type})\n")
+        f.write("="*60 + "\n")
+        for name, met in results.items():
+            total_time = sum(round_times[name])
+            f.write(f"{name}:\n")
+            f.write(f"  Accuracy:  {met['accuracy']:.2f}%\n")
+            f.write(f"  Precision: {met['precision']:.2f}%\n")
+            f.write(f"  Recall:    {met['recall']:.2f}%\n")
+            f.write(f"  F1-Score:  {met['f1_score']:.2f}%\n")
+            f.write(f"  AUC-ROC:   {met['auc_roc']:.2f}%\n")
+            f.write(f"  Total time: {total_time:.2f}s\n\n")
+    print("\n✅ Ablation results saved to results/ablation_results.txt")
+
+    return results, round_times
                  num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8,
                  iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print("\n" + "="*70)
