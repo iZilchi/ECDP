@@ -34,10 +34,8 @@ class ComprehensiveMetrics:
         Map integer labels to display names.
         Falls back to 'Class N' if class_names is None or the wrong length.
         """
-        if (
-            self.class_names is not None
-            and len(self.class_names) == max(unique_labels) + 1
-        ):
+        if (self.class_names is not None
+            and len(self.class_names) == max(unique_labels) + 1):
             return [self.class_names[i] for i in unique_labels]
         return [f"Class {i}" for i in unique_labels]
 
@@ -76,13 +74,25 @@ class ComprehensiveMetrics:
         f1        = f1_score(all_targets, all_preds,
                              average='weighted', zero_division=0) * 100
 
+        # ---------- FIXED AUC-ROC ----------
         try:
-            auc_roc = roc_auc_score(
-                all_targets, all_probs,
-                multi_class='ovr', average='weighted'
-            ) * 100
-        except ValueError:
-            auc_roc = 0.0
+            if self.num_classes == 2:
+                # Binary case: use probabilities of the positive class (index 1)
+                if all_probs.shape[1] >= 2:
+                    pos_probs = all_probs[:, 1]
+                else:
+                    pos_probs = all_probs.ravel()
+                auc_roc = roc_auc_score(all_targets, pos_probs) * 100
+            else:
+                # Multi-class: one-vs-rest weighted average
+                auc_roc = roc_auc_score(all_targets, all_probs,
+                                        multi_class='ovr',
+                                        average='weighted') * 100
+        except (ValueError, IndexError) as e:
+            # Fallback: compute using predicted labels (less accurate but works)
+            print(f"Warning: AUC-ROC calculation failed ({e}). Using label-based AUC.")
+            auc_roc = roc_auc_score(all_targets, all_preds,
+                                    average='weighted', multi_class='ovr') * 100
 
         conf_matrix = confusion_matrix(all_targets, all_preds)
 
@@ -132,8 +142,7 @@ class ComprehensiveMetrics:
         """
         Build a sklearn classification report that always passes the correct
         labels list, avoiding the 'Number of classes does not match
-        target_names' error that occurred when using a chest (2-class) dataset
-        with skin (7-class) class_names.
+        target_names' error.
         """
         unique_labels = self._unique_labels(targets, predictions)
         label_names   = self._label_names(unique_labels)
@@ -159,7 +168,7 @@ class ComprehensiveMetrics:
 
 
 # ---------------------------------------------------------------------------
-# System-level helpers (unchanged)
+# System-level helpers
 # ---------------------------------------------------------------------------
 
 class SystemMetrics:

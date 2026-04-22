@@ -9,8 +9,10 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
+from utils.tb_uganda_loader import get_tb_uganda_dataloaders   # fixed loader
 from models.medium_cnn import MediumCNN
 from models.chest_cnn import ChestCNN
+from models.tb_cnn import TBCNN                                 # new model
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import ComprehensiveMetrics, SystemMetrics, compare_methods_comprehensive
@@ -24,7 +26,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, num_rounds=10,
                    device='cpu', c=2.5, alpha=0.8, seed=42, plot=True, iid=True,
                    dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print(f"\n{'='*60}")
@@ -42,19 +44,29 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     set_seed(seed)
 
+    # ---------- Dataset and model selection ----------
     if dataset == 'skin':
         client_loaders, test_loader = get_skin_cancer_dataloaders(
             num_clients=num_clients, batch_size=64,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
         model_class = MediumCNN
         num_classes = 7
-    else:
+    elif dataset == 'chest':
         client_loaders, test_loader = get_chest_xray_dataloaders(
             num_clients=num_clients, batch_size=64,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
         model_class = ChestCNN
         num_classes = 2
+    elif dataset == 'tb_uganda':
+        client_loaders, test_loader = get_tb_uganda_dataloaders(
+            num_clients=num_clients, batch_size=32,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+        model_class = TBCNN        # dedicated TB model
+        num_classes = 2
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
+    # ---------- Initialize methods ----------
     std_fl = StandardFL(num_clients, lambda: model_class(num_classes=num_classes), device)
     
     if per_round_epsilon is not None:
@@ -107,7 +119,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
 
     return metrics, histories, test_loader, round_times
 
-def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
+def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, num_rounds=10,
                    num_trials=10, device='cpu', c=2.5, alpha=0.8, base_seed=42,
                    iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print("\n" + "="*70)
@@ -144,12 +156,20 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
             model_class = MediumCNN
             num_classes = 7
-        else:
+        elif dataset == 'chest':
             client_loaders, test_loader = get_chest_xray_dataloaders(
                 num_clients=num_clients, batch_size=64,
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
             model_class = ChestCNN
             num_classes = 2
+        elif dataset == 'tb_uganda':
+            client_loaders, test_loader = get_tb_uganda_dataloaders(
+                num_clients=num_clients, batch_size=32,
+                iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
+            model_class = TBCNN
+            num_classes = 2
+        else:
+            raise ValueError(f"Unknown dataset: {dataset}")
 
         std_fl = StandardFL(num_clients, lambda: model_class(num_classes=num_classes), device)
         if per_round_epsilon is not None:
@@ -242,12 +262,20 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = MediumCNN
         num_classes = 7
-    else:
+    elif dataset == 'chest':
         client_loaders, test_loader = get_chest_xray_dataloaders(
             num_clients=num_clients, batch_size=64,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = ChestCNN
         num_classes = 2
+    elif dataset == 'tb_uganda':
+        client_loaders, test_loader = get_tb_uganda_dataloaders(
+            num_clients=num_clients, batch_size=32,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = TBCNN
+        num_classes = 2
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
     if per_round_epsilon is not None:
         dp_fl = BasicDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
@@ -293,117 +321,7 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, n
         f.write(f"EC-DP-FL accuracy: {aggregate(all_ecdp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_ecdp_metrics, 'accuracy')[1]:.2f}%\n")
     print("\n✅ Validation complete. Results saved to results/validation_results.txt")
 
-def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=0.5, num_rounds=10,
-                 device='cpu', base_seed=42, c=1.5, alpha=0.8,
-                 iid=True, dirichlet_alpha=0.5, dataset='chest', num_clients=10):
-    """
-    Ablation study with IDENTICAL data partitions for all configurations.
-    Fixes the previous bug where each config got different client splits.
-    """
-    print("\n" + "="*70)
-    print("ABLATION STUDY (Fixed: same data partition for all configs)")
-    if per_round_epsilon is not None:
-        mode = "per‑round ε"
-        eps = per_round_epsilon
-    else:
-        mode = "total ε"
-        eps = target_epsilon
-    dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
-    print(f"Configuration: {mode}={eps}, rounds={num_rounds}, dataset={dataset}, clients={num_clients}, "
-          f"clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
-    print("="*70)
-
-    # Set seed once
-    set_seed(base_seed)
-
-    # Load data ONCE – reused for all configurations
-    if dataset == 'pneumonia':
-        client_loaders, test_loader = get_pneumoniamnist_dataloaders(
-            num_clients=num_clients, batch_size=64,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = PneumoniaCNN
-        num_classes = 2
-        class_names = ['NORMAL', 'PNEUMONIA']
-    elif dataset == 'breast':
-        client_loaders, test_loader = get_breastmnist_dataloaders(
-            num_clients=num_clients, batch_size=64,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = BreastCNN
-        num_classes = 2
-        class_names = ['Benign', 'Malignant']
-    else:  # skin / chest fallback
-        # For skin, use your existing loader
-        from utils.data_loader import get_skin_cancer_dataloaders
-        client_loaders, test_loader = get_skin_cancer_dataloaders(
-            num_clients=num_clients, batch_size=64,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = MediumCNN
-        num_classes = 7
-        class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
-
-    configs = [
-        ('Standard FL', False, False, False),
-        ('DP only',      True,  False, False),
-        ('DP + EVC',     True,  True,  False),
-        ('DP + AGS',     True,  False, True),
-        ('ECDP-FL (full)', True, True, True),
-    ]
-
-    results = {}
-    round_times = {}
-
-    for name, use_dp, use_evc, use_ags in configs:
-        print(f"\n{'='*60}")
-        print(f"--- Ablation: {name} (same data partition) ---")
-        print(f"{'='*60}")
-
-        if not use_dp:
-            model = StandardFL(num_clients, lambda: model_class(num_classes=num_classes),
-                               device, num_classes=num_classes)
-        else:
-            if per_round_epsilon is not None:
-                model = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes),
-                               device, epsilon=per_round_epsilon, clip_norm=clip_norm,
-                               use_evc=use_evc, use_ags=use_ags, c=c, alpha=alpha,
-                               iid=iid, dataset_name=dataset, num_classes=num_classes)
-            else:
-                model = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes),
-                               device, epsilon=None, target_epsilon=target_epsilon,
-                               max_rounds=num_rounds, clip_norm=clip_norm,
-                               use_evc=use_evc, use_ags=use_ags, c=c, alpha=alpha,
-                               iid=iid, dataset_name=dataset, num_classes=num_classes)
-
-        # Train
-        for r in range(num_rounds):
-            model.train_round(client_loaders, epochs=2)
-
-        # Compute metrics
-        met = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
-        metrics = met.compute_all_metrics(model.global_model, test_loader, device)
-        results[name] = metrics
-        round_times[name] = model.round_times.copy()
-        total_time = sum(model.round_times)
-        avg_time = total_time / len(model.round_times)
-        print(f"Total training time: {total_time:.2f}s, avg per round: {avg_time:.2f}s")
-        met.print_metrics_table(metrics, name)
-
-    # Save results
-    os.makedirs('results', exist_ok=True)
-    with open('results/ablation_results.txt', 'w', encoding='utf-8') as f:
-        f.write(f"Ablation Study Results (dataset={dataset}, distribution={dist_type})\n")
-        f.write("="*60 + "\n")
-        for name, met in results.items():
-            total_time = sum(round_times[name])
-            f.write(f"{name}:\n")
-            f.write(f"  Accuracy:  {met['accuracy']:.2f}%\n")
-            f.write(f"  Precision: {met['precision']:.2f}%\n")
-            f.write(f"  Recall:    {met['recall']:.2f}%\n")
-            f.write(f"  F1-Score:  {met['f1_score']:.2f}%\n")
-            f.write(f"  AUC-ROC:   {met['auc_roc']:.2f}%\n")
-            f.write(f"  Total time: {total_time:.2f}s\n\n")
-    print("\n✅ Ablation results saved to results/ablation_results.txt")
-
-    return results, round_times
+def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0,
                  num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8,
                  iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print("\n" + "="*70)
@@ -426,12 +344,20 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=0.5, num
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = MediumCNN
         num_classes = 7
-    else:
+    elif dataset == 'chest':
         client_loaders, test_loader = get_chest_xray_dataloaders(
             num_clients=num_clients, batch_size=64,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = ChestCNN
         num_classes = 2
+    elif dataset == 'tb_uganda':
+        client_loaders, test_loader = get_tb_uganda_dataloaders(
+            num_clients=num_clients, batch_size=32,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = TBCNN
+        num_classes = 2
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
     metrics_calc = ComprehensiveMetrics(num_classes=num_classes)
 
@@ -440,7 +366,6 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=0.5, num
         ("DP only", True, False, False),
         ("DP + EVC", True, True, False),
         ("DP + AGS", True, False, True),
-        ("ECDP-FL (full)", True, True, True),
     ]
 
     results = {}
@@ -483,7 +408,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=0.5, num
             f.write(f"  Total time: {total_time:.2f}s\n\n")
     print("\n✅ Ablation results saved to results/ablation_results.txt")
 
-def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
+def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0,
                            num_rounds=10, device='cpu', c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8], seed=42, iid=True,
                            dirichlet_alpha=0.5, dataset='skin', num_clients=10):
@@ -525,12 +450,20 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
             model_class = MediumCNN
             num_classes = 7
-        else:
+        elif dataset == 'chest':
             client_loaders, test_loader = get_chest_xray_dataloaders(
                 num_clients=num_clients, batch_size=64,
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
             model_class = ChestCNN
             num_classes = 2
+        elif dataset == 'tb_uganda':
+            client_loaders, test_loader = get_tb_uganda_dataloaders(
+                num_clients=num_clients, batch_size=32,
+                iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+            model_class = TBCNN
+            num_classes = 2
+        else:
+            raise ValueError(f"Unknown dataset: {dataset}")
 
         if eps <= 0.5:
             c, alpha = 1.5, 0.6
@@ -568,12 +501,21 @@ def run_tradeoff(epsilon_values, clip_norm, num_rounds=10, device='cpu', base_se
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = MediumCNN
         num_classes = 7
-    else:
+    elif dataset == 'chest':
         client_loaders, test_loader = get_chest_xray_dataloaders(
             num_clients=num_clients, batch_size=64,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
         model_class = ChestCNN
         num_classes = 2
+    elif dataset == 'tb_uganda':
+        client_loaders, test_loader = get_tb_uganda_dataloaders(
+            num_clients=num_clients, batch_size=32,
+            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
+        model_class = TBCNN
+        num_classes = 2
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+
     std_fl = StandardFL(num_clients, lambda: model_class(num_classes=num_classes), device)
     for r in range(num_rounds):
         std_fl.train_round(client_loaders, epochs=2)
@@ -598,10 +540,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['comparison', 'tradeoff', 'tune', 'validation', 'ablation'],
                         default='comparison')
-    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin', help='Dataset to use')
+    parser.add_argument('--dataset', choices=['skin', 'chest', 'tb_uganda'], default='skin',
+                        help='Dataset to use (skin=HAM10000, chest=pneumonia, tb_uganda=Uganda TB X-ray)')
     parser.add_argument('--per_round_epsilon', type=float, default=None)
     parser.add_argument('--target_epsilon', type=float, default=None)
-    parser.add_argument('--clip_norm', type=float, default=2.3)
+    parser.add_argument('--clip_norm', type=float, default=2.0)
     parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42)
