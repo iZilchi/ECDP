@@ -1,6 +1,6 @@
 """
 Analyze model update norms after local training.
-Now supports both skin (HAM10000) and chest X-ray datasets.
+Now supports skin (HAM10000), chest X-ray (pneumonia), and TB Uganda datasets.
 """
 import sys
 import os
@@ -11,8 +11,42 @@ import numpy as np
 import argparse
 from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
+from utils.tb_uganda_loader import get_tb_uganda_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_cnn import ChestCNN
+
+# Try to import TBCNN, if not available, define a simple one
+try:
+    from models.tb_cnn import TBCNN
+except ImportError:
+    # Fallback: define a simple CNN for TB (32x32 input)
+    import torch.nn as nn
+    class TBCNN(nn.Module):
+        def __init__(self, num_classes=2):
+            super().__init__()
+            self.conv = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                nn.Conv2d(16, 32, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.MaxPool2d(2),
+                nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((4,4))
+            )
+            self.fc = nn.Sequential(
+                nn.Dropout(0.3),
+                nn.Linear(64 * 4 * 4, 128),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(128, num_classes)
+            )
+        def forward(self, x):
+            x = self.conv(x)
+            x = x.view(x.size(0), -1)
+            x = self.fc(x)
+            return x
 
 def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
     print("="*70)
@@ -21,14 +55,21 @@ def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # Select dataset and model
     if dataset == 'skin':
         client_loaders, _ = get_skin_cancer_dataloaders(num_clients=num_clients, batch_size=64)
         model_class = MediumCNN
         num_classes = 7
-    else:
+    elif dataset == 'chest':
         client_loaders, _ = get_chest_xray_dataloaders(num_clients=num_clients, batch_size=64)
         model_class = ChestCNN
         num_classes = 2
+    elif dataset == 'tb_uganda':
+        client_loaders, _ = get_tb_uganda_dataloaders(num_clients=num_clients, batch_size=32)
+        model_class = TBCNN   # now defined
+        num_classes = 2
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
 
     update_norms = []
 
@@ -102,7 +143,8 @@ def analyze_update_norms(num_clients=10, epochs=2, batches=40, dataset='skin'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', choices=['skin', 'chest'], default='skin')
+    parser.add_argument('--dataset', choices=['skin', 'chest', 'tb_uganda'], default='skin',
+                        help='Dataset to analyze (skin=HAM10000, chest=pneumonia, tb_uganda=TB Uganda)')
     parser.add_argument('--clients', type=int, default=10,
                         help='Number of simulated clients (default: 10)')
     args = parser.parse_args()

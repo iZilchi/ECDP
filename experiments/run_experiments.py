@@ -4,15 +4,16 @@ import sys
 import os
 import random
 import numpy as np
+from scipy import stats   # for paired t-test
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.data_loader import get_skin_cancer_dataloaders
 from utils.chest_xray_loader import get_chest_xray_dataloaders
-from utils.tb_uganda_loader import get_tb_uganda_dataloaders   # fixed loader
+from utils.tb_uganda_loader import get_tb_uganda_dataloaders
 from models.medium_cnn import MediumCNN
 from models.chest_cnn import ChestCNN
-from models.tb_cnn import TBCNN                                 # new model
+from models.tb_cnn import TBCNN
 from core.federated_learning import FederatedLearningBase as StandardFL
 from core.dpfl import BasicDPFL, ECDPFL
 from utils.metrics import ComprehensiveMetrics, SystemMetrics, compare_methods_comprehensive
@@ -26,7 +27,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, num_rounds=10,
+def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
                    device='cpu', c=2.5, alpha=0.8, seed=42, plot=True, iid=True,
                    dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print(f"\n{'='*60}")
@@ -61,7 +62,7 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
         client_loaders, test_loader = get_tb_uganda_dataloaders(
             num_clients=num_clients, batch_size=32,
             iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
-        model_class = TBCNN        # dedicated TB model
+        model_class = TBCNN
         num_classes = 2
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
@@ -119,9 +120,17 @@ def run_comparison(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
 
     return metrics, histories, test_loader, round_times
 
-def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, num_rounds=10,
+def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3, num_rounds=10,
                    num_trials=10, device='cpu', c=2.5, alpha=0.8, base_seed=42,
-                   iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10):
+                   iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10,
+                   use_evc=True, use_ags=True):
+    """
+    Run validation with explicit control over EVC and AGS components.
+    
+    Args:
+        use_evc: Enable Extreme Value Clipping (default: True)
+        use_ags: Enable Adaptive Gradient Smoothing (default: True)
+    """
     print("\n" + "="*70)
     print("STATISTICAL VALIDATION (10 independent runs)")
     if per_round_epsilon is not None:
@@ -133,6 +142,7 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
     dist_type = "IID" if iid else f"non-IID (α={dirichlet_alpha})"
     print(f"Configuration: {mode}={eps}, rounds={num_rounds}, dataset={dataset}, clients={num_clients}, "
           f"clip_norm={clip_norm}, c={c}, α={alpha}, distribution={dist_type}")
+    print(f"Components: EVC={use_evc}, AGS={use_ags}")
     print("="*70)
 
     all_std_metrics = []
@@ -150,42 +160,50 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
         print(f"\n--- Trial {trial+1}/{num_trials} (seed={seed}) ---")
         set_seed(seed)
 
+        # ---------- Dataset and model selection ----------
         if dataset == 'skin':
             client_loaders, test_loader = get_skin_cancer_dataloaders(
                 num_clients=num_clients, batch_size=64,
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
             model_class = MediumCNN
             num_classes = 7
+            class_names = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
         elif dataset == 'chest':
             client_loaders, test_loader = get_chest_xray_dataloaders(
                 num_clients=num_clients, batch_size=64,
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
             model_class = ChestCNN
             num_classes = 2
+            class_names = ['NORMAL', 'PNEUMONIA']
         elif dataset == 'tb_uganda':
             client_loaders, test_loader = get_tb_uganda_dataloaders(
                 num_clients=num_clients, batch_size=32,
                 iid=iid, dirichlet_alpha=dirichlet_alpha, seed=seed)
             model_class = TBCNN
             num_classes = 2
+            class_names = ['NORMAL', 'TB']
         else:
             raise ValueError(f"Unknown dataset: {dataset}")
 
+        # ---------- Initialize methods ----------
         std_fl = StandardFL(num_clients, lambda: model_class(num_classes=num_classes), device)
+        
         if per_round_epsilon is not None:
             dp_fl = BasicDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
                               epsilon=per_round_epsilon, clip_norm=clip_norm)
             ecdp_fl = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
-                             epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
+                             epsilon=per_round_epsilon, clip_norm=clip_norm,
+                             c=c, alpha=alpha, use_evc=use_evc, use_ags=use_ags)
         else:
             dp_fl = BasicDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
                               epsilon=None, target_epsilon=target_epsilon,
                               max_rounds=num_rounds, clip_norm=clip_norm)
             ecdp_fl = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
                              epsilon=None, target_epsilon=target_epsilon,
-                             max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
+                             max_rounds=num_rounds, clip_norm=clip_norm,
+                             c=c, alpha=alpha, use_evc=use_evc, use_ags=use_ags)
 
-        # Train Standard FL
+        # Train all methods
         std_acc_history = []
         for r in range(num_rounds):
             std_fl.train_round(client_loaders, epochs=2)
@@ -194,7 +212,6 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
         all_std_history.append(std_acc_history)
         all_std_round_times.append(std_fl.round_times)
 
-        # Train DP-FL
         dp_acc_history = []
         for r in range(num_rounds):
             dp_fl.train_round(client_loaders, epochs=2)
@@ -203,7 +220,6 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
         all_dp_history.append(dp_acc_history)
         all_dp_round_times.append(dp_fl.round_times)
 
-        # Train EC-DP-FL
         ecdp_acc_history = []
         for r in range(num_rounds):
             ecdp_fl.train_round(client_loaders, epochs=2)
@@ -212,11 +228,21 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
         all_ecdp_history.append(ecdp_acc_history)
         all_ecdp_round_times.append(ecdp_fl.round_times)
 
-        metrics_calc = ComprehensiveMetrics(num_classes=num_classes)
-        all_std_metrics.append(metrics_calc.compute_all_metrics(std_fl.global_model, test_loader, device))
-        all_dp_metrics.append(metrics_calc.compute_all_metrics(dp_fl.global_model, test_loader, device))
-        all_ecdp_metrics.append(metrics_calc.compute_all_metrics(ecdp_fl.global_model, test_loader, device))
+        # Compute final metrics
+        metrics_calc = ComprehensiveMetrics(num_classes=num_classes, class_names=class_names)
+        std_met = metrics_calc.compute_all_metrics(std_fl.global_model, test_loader, device)
+        dp_met  = metrics_calc.compute_all_metrics(dp_fl.global_model, test_loader, device)
+        ecdp_met = metrics_calc.compute_all_metrics(ecdp_fl.global_model, test_loader, device)
 
+        all_std_metrics.append(std_met)
+        all_dp_metrics.append(dp_met)
+        all_ecdp_metrics.append(ecdp_met)
+
+        # Print trial results (as percentages)
+        print(f"  Std FL: {std_met['accuracy']:.2f}% | DP-FL: {dp_met['accuracy']:.2f}% | "
+              f"EC-DP-FL: {ecdp_met['accuracy']:.2f}%")
+
+    # ---------- Aggregate results ----------
     def aggregate(metric_list, key):
         values = [m[key] for m in metric_list]
         return np.mean(values), np.std(values)
@@ -233,95 +259,44 @@ def run_validation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0, n
             mean_val, std_val = aggregate(metric_list, metric)
             print(f"  {metric.capitalize():10s}: {mean_val:6.2f} ± {std_val:5.2f}%")
 
-    sys_metrics = SystemMetrics()
+    # ---------- Per‑trial comparison (ECDP vs Basic DP) ----------
+    print("\n" + "="*70)
+    print("PER-TRIAL ANALYSIS (EC-DP-FL vs Basic DP-FL)")
+    print("="*70)
+    dp_accs = [m['accuracy'] for m in all_dp_metrics]
+    ecdp_accs = [m['accuracy'] for m in all_ecdp_metrics]
+    
+    ecdp_wins = sum(1 for e, d in zip(ecdp_accs, dp_accs) if e > d)
+    print(f"EC-DP-FL wins: {ecdp_wins}/{num_trials} ({ecdp_wins/num_trials*100:.1f}%)")
+    
+    try:
+        t_stat, p_value = stats.ttest_rel(ecdp_accs, dp_accs)
+        print(f"Paired t-test: t={t_stat:.3f}, p={p_value:.4f}")
+        if p_value < 0.05 and np.mean(ecdp_accs) > np.mean(dp_accs):
+            print("Significant improvement: YES ✓")
+        else:
+            print("Significant improvement: NO")
+    except Exception as e:
+        print(f"Could not compute t-test: {e}")
 
-    def time_stats(round_times_list):
-        totals = [sum(t) for t in round_times_list]
-        return np.mean(totals), np.std(totals)
-
-    print("\n--- System-level Metrics ---")
-    for name, rt_list in [("Standard FL", all_std_round_times),
-                          ("Basic DP-FL", all_dp_round_times),
-                          ("EC-DP-FL", all_ecdp_round_times)]:
-        total_mean, total_std = time_stats(rt_list)
-        print(f"{name} Training Time: {total_mean:.2f} ± {total_std:.2f} sec")
-
-    conv_std = [sys_metrics.compute_convergence_rate(h) for h in all_std_history]
-    conv_dp = [sys_metrics.compute_convergence_rate(h) for h in all_dp_history]
-    conv_ecdp = [sys_metrics.compute_convergence_rate(h) for h in all_ecdp_history]
-    print(f"\nConvergence rate (rounds to 95% final acc):")
-    print(f"  Standard FL: {np.mean(conv_std):.1f} ± {np.std(conv_std):.1f} rounds")
-    print(f"  Basic DP-FL: {np.mean(conv_dp):.1f} ± {np.std(conv_dp):.1f} rounds")
-    print(f"  EC-DP-FL:    {np.mean(conv_ecdp):.1f} ± {np.std(conv_ecdp):.1f} rounds")
-
-    # Inference latency using final models from first trial
-    set_seed(base_seed)
-    if dataset == 'skin':
-        client_loaders, test_loader = get_skin_cancer_dataloaders(
-            num_clients=num_clients, batch_size=64,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = MediumCNN
-        num_classes = 7
-    elif dataset == 'chest':
-        client_loaders, test_loader = get_chest_xray_dataloaders(
-            num_clients=num_clients, batch_size=64,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = ChestCNN
-        num_classes = 2
-    elif dataset == 'tb_uganda':
-        client_loaders, test_loader = get_tb_uganda_dataloaders(
-            num_clients=num_clients, batch_size=32,
-            iid=iid, dirichlet_alpha=dirichlet_alpha, seed=base_seed)
-        model_class = TBCNN
-        num_classes = 2
-    else:
-        raise ValueError(f"Unknown dataset: {dataset}")
-
-    if per_round_epsilon is not None:
-        dp_fl = BasicDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
-                          epsilon=per_round_epsilon, clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
-                         epsilon=per_round_epsilon, clip_norm=clip_norm, c=c, alpha=alpha)
-    else:
-        dp_fl = BasicDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
-                          epsilon=None, target_epsilon=target_epsilon,
-                          max_rounds=num_rounds, clip_norm=clip_norm)
-        ecdp_fl = ECDPFL(num_clients, lambda: model_class(num_classes=num_classes), device,
-                         epsilon=None, target_epsilon=target_epsilon,
-                         max_rounds=num_rounds, clip_norm=clip_norm, c=c, alpha=alpha)
-    std_fl = StandardFL(num_clients, lambda: model_class(num_classes=num_classes), device)
-    for r in range(num_rounds):
-        std_fl.train_round(client_loaders, epochs=2)
-        dp_fl.train_round(client_loaders, epochs=2)
-        ecdp_fl.train_round(client_loaders, epochs=2)
-    sample_input = torch.randn(1, 3, 224, 224)
-    std_lat = sys_metrics.measure_inference_latency(std_fl.global_model, sample_input, device)
-    dp_lat = sys_metrics.measure_inference_latency(dp_fl.global_model, sample_input, device)
-    ecdp_lat = sys_metrics.measure_inference_latency(ecdp_fl.global_model, sample_input, device)
-    print(f"\nInference latency (ms):")
-    print(f"  Standard FL: {std_lat:.2f} ms")
-    print(f"  Basic DP-FL: {dp_lat:.2f} ms")
-    print(f"  EC-DP-FL:    {ecdp_lat:.2f} ms")
-
-    model_size = sys_metrics.get_model_size(std_fl.global_model)
-    print(f"\nModel size: {model_size:.2f} MB")
-
-    print("\n--- Variance across runs (std) ---")
-    for name, metric_list in [("Standard FL", all_std_metrics),
-                              ("Basic DP-FL", all_dp_metrics),
-                              ("EC-DP-FL", all_ecdp_metrics)]:
-        _, acc_std = aggregate(metric_list, 'accuracy')
-        print(f"{name} accuracy variance: {acc_std**2:.4f} (std={acc_std:.2f})")
-
+    # Save results to file
     os.makedirs('results', exist_ok=True)
     with open('results/validation_results.txt', 'w') as f:
         f.write(f"Validation results for {mode}={eps}, {num_trials} trials, dataset={dataset}, distribution={dist_type}\n")
+        f.write(f"Components: EVC={use_evc}, AGS={use_ags}\n")
         f.write(f"Standard FL accuracy: {aggregate(all_std_metrics, 'accuracy')[0]:.2f}±{aggregate(all_std_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"Basic DP-FL accuracy: {aggregate(all_dp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_dp_metrics, 'accuracy')[1]:.2f}%\n")
         f.write(f"EC-DP-FL accuracy: {aggregate(all_ecdp_metrics, 'accuracy')[0]:.2f}±{aggregate(all_ecdp_metrics, 'accuracy')[1]:.2f}%\n")
+        f.write(f"EC-DP-FL wins: {ecdp_wins}/{num_trials}\n")
     print("\n✅ Validation complete. Results saved to results/validation_results.txt")
 
-def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0,
+    return {
+        'std':  all_std_metrics,
+        'dp':   all_dp_metrics,
+        'ecdp': all_ecdp_metrics,
+    }
+
+def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                  num_rounds=10, device='cpu', base_seed=42, c=2.5, alpha=0.8,
                  iid=True, dirichlet_alpha=0.5, dataset='skin', num_clients=10):
     print("\n" + "="*70)
@@ -408,7 +383,7 @@ def run_ablation(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0,
             f.write(f"  Total time: {total_time:.2f}s\n\n")
     print("\n✅ Ablation results saved to results/ablation_results.txt")
 
-def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.0,
+def tune_correction_params(per_round_epsilon=None, target_epsilon=None, clip_norm=2.3,
                            num_rounds=10, device='cpu', c_values=[1.5, 2.0, 2.5],
                            alpha_values=[0.6, 0.7, 0.8], seed=42, iid=True,
                            dirichlet_alpha=0.5, dataset='skin', num_clients=10):
@@ -544,7 +519,7 @@ if __name__ == '__main__':
                         help='Dataset to use (skin=HAM10000, chest=pneumonia, tb_uganda=Uganda TB X-ray)')
     parser.add_argument('--per_round_epsilon', type=float, default=None)
     parser.add_argument('--target_epsilon', type=float, default=None)
-    parser.add_argument('--clip_norm', type=float, default=2.0)
+    parser.add_argument('--clip_norm', type=float, default=2.3)
     parser.add_argument('--rounds', type=int, default=20)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=42)
@@ -556,6 +531,14 @@ if __name__ == '__main__':
                         help='Dirichlet concentration (lower = more heterogeneous)')
     parser.add_argument('--clients', type=int, default=10,
                         help='Number of simulated clients (default: 10)')
+    parser.add_argument('--use_evc', action='store_true', default=True,
+                        help='Enable Extreme Value Clipping (default: True)')
+    parser.add_argument('--use_ags', action='store_true', default=True,
+                        help='Enable Adaptive Gradient Smoothing (default: True)')
+    parser.add_argument('--no_evc', dest='use_evc', action='store_false',
+                        help='Disable Extreme Value Clipping')
+    parser.add_argument('--no_ags', dest='use_ags', action='store_false',
+                        help='Disable Adaptive Gradient Smoothing')
     args = parser.parse_args()
 
     if args.device == 'cuda' and torch.cuda.is_available():
@@ -587,7 +570,8 @@ if __name__ == '__main__':
         run_validation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
                        args.trials, device, args.c, args.alpha, base_seed=args.seed,
                        iid=iid, dirichlet_alpha=dirichlet_alpha,
-                       dataset=args.dataset, num_clients=args.clients)
+                       dataset=args.dataset, num_clients=args.clients,
+                       use_evc=args.use_evc, use_ags=args.use_ags)
     elif args.mode == 'ablation':
         run_ablation(args.per_round_epsilon, args.target_epsilon, args.clip_norm, args.rounds,
                      device, base_seed=args.seed, c=args.c, alpha=args.alpha,
