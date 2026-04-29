@@ -12,7 +12,7 @@ class MediumCNN(nn.Module):
             nn.MaxPool2d(2),
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((4,4))                
+            nn.AdaptiveAvgPool2d((4,4))
         )
         self.fc = nn.Sequential(
             nn.Dropout(0.3),
