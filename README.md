@@ -143,6 +143,7 @@ python utils/analyze_gradients.py --dataset skin --clients 10
 Prints update norm statistics and recommends a clip_norm value (e.g., 75th percentile).
 
 ### Project Structure
+```
 ECDP/
 ├── core/                     # FL, DP, and error correction implementations
 │   ├── federated_learning.py
@@ -171,6 +172,7 @@ ECDP/
 ├── check_dataset.py
 ├── check_chest_xray_dataset.py
 └── prepare_*.py              # Other preparation scripts
+```
 
 ### Important Notes
 Do not commit the dataset folders or the virtual environment – they are excluded via .gitignore.
