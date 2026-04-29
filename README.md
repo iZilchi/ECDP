@@ -111,6 +111,22 @@ After completing the steps above, all datasets are ready for federated learning 
 ### Running Experiments
 All experiments are controlled by experiments/run_experiments.py. Use the --mode argument to select the type of analysis.
 
+## Common arguments
+```
+Argument	                            Description
+--mode	                  comparison, tradeoff, validation, ablation
+--dataset	                skin, chest, tb_uganda, breastmnist
+--per_round_epsilon	      Fixed ε per communication round
+--target_epsilon	        Total ε budget across all rounds (overrides per_round)
+--rounds	                Number of communication rounds
+--clients	                Number of simulated clients
+--non_iid	                Use non‑IID Dirichlet partitioning
+--dirichlet_alpha	        Concentration (lower = more heterogeneous)
+--clip_norm	              Gradient clipping norm (use gradient analysis to choose)
+--c	                      Correction bound parameter for EVC
+--alpha	                  Smoothing coefficient for AGS
+```
+
 #### Example Commands
 ### 1. Standard comparison (Standard FL vs Basic DP‑FL vs EC‑DP‑FL)
 ```bash
