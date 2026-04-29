@@ -1,13 +1,14 @@
+from torchvision import transforms
+from torch.utils.data import DataLoader, Subset
+import pandas as pd
+from PIL import Image
 import os
+import torch
 import json
 import numpy as np
-import pandas as pd
-import torch
-from torch.utils.data import DataLoader, Subset
-from torchvision import transforms
-from PIL import Image
 
 class HAM10000Dataset(torch.utils.data.Dataset):
+    """Custom dataset for HAM10000 skin cancer images."""
     def __init__(self, csv_file, data_dir, transform=None):
         self.data_frame = pd.read_csv(csv_file)
         self.data_dir = data_dir
@@ -35,12 +36,12 @@ class HAM10000Dataset(torch.utils.data.Dataset):
 
         image_path = self._find_image(img_name_clean, img_name)
         if image_path is None:
-            image = Image.new('RGB', (224, 224), color='gray')
+            image = Image.new('RGB', (28, 28), color='gray')
         else:
             try:
                 image = Image.open(image_path).convert('RGB')
             except:
-                image = Image.new('RGB', (224, 224), color='gray')
+                image = Image.new('RGB', (28, 28), color='gray')
 
         label_str = self.data_frame.iloc[idx]['dx']
         label = self.label_map[label_str]
@@ -79,42 +80,28 @@ class HAM10000Dataset(torch.utils.data.Dataset):
                     return potential2
         return None
 
-def dirichlet_partition(dataset, num_clients, alpha, seed=42):
-    np.random.seed(seed)
-    targets = np.array([dataset[i][1] for i in range(len(dataset))])
-    n_classes = len(np.unique(targets))
-    class_indices = [np.where(targets == c)[0] for c in range(n_classes)]
-    client_indices = [[] for _ in range(num_clients)]
+def get_skin_cancer_dataloaders(num_clients=3, batch_size=64, data_dir='./data/skin_cancer',
+                                iid=True, dirichlet_alpha=0.5, seed=42):
+    """
+    Create federated dataloaders with IID or non-IID (Dirichlet) partitioning.
 
-    for c in range(n_classes):
-        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
-        proportions = np.maximum(proportions, 1e-6)
-        proportions /= proportions.sum()
-        indices = class_indices[c].copy()
-        np.random.shuffle(indices)
-        sizes = (proportions * len(indices)).astype(int)
-        diff = len(indices) - sizes.sum()
-        if diff > 0:
-            sizes[np.argmax(sizes)] += diff
-        elif diff < 0:
-            sizes[np.argmin(sizes)] -= diff
-        start = 0
-        for i, size in enumerate(sizes):
-            client_indices[i].extend(indices[start:start+size])
-            start += size
-    return client_indices
-
-def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/skin_cancer',
-                                alpha=None, seed=42, num_workers=4):
+    Args:
+        num_clients: number of clients
+        batch_size: batch size for each client
+        data_dir: path to dataset
+        iid: if True, split data evenly (IID). If False, use Dirichlet distribution for non-IID.
+        dirichlet_alpha: concentration parameter (lower = more heterogeneous)
+        seed: random seed for reproducibility
+    """
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((28, 28)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     test_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((28, 28)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -125,24 +112,72 @@ def get_skin_cancer_dataloaders(num_clients=3, batch_size=32, data_dir='./data/s
     train_dataset = HAM10000Dataset(train_csv, data_dir, transform=transform)
     test_dataset = HAM10000Dataset(test_csv, data_dir, transform=test_transform)
 
-    if alpha is not None:
-        client_indices = dirichlet_partition(train_dataset, num_clients, alpha, seed)
-        client_datasets = [Subset(train_dataset, idx) for idx in client_indices]
-    else:
-        total_samples = len(train_dataset)
-        samples_per_client = total_samples // num_clients
-        client_datasets = []
+    # Get labels for all training samples
+    labels = [train_dataset[i][1] for i in range(len(train_dataset))]
+    labels = np.array(labels)
+
+    # CRITICAL FIX: Shuffle all indices first to ensure IID split is truly random
+    np.random.seed(seed)
+    all_indices = np.random.permutation(len(train_dataset))
+
+    if iid:
+        # IID: split shuffled indices evenly
+        samples_per_client = len(train_dataset) // num_clients
+        client_indices = []
         for i in range(num_clients):
             start = i * samples_per_client
-            end = start + samples_per_client if i < num_clients - 1 else total_samples
-            client_datasets.append(Subset(train_dataset, range(start, end)))
+            end = start + samples_per_client if i < num_clients - 1 else len(train_dataset)
+            client_indices.append(all_indices[start:end].tolist())
+    else:
+        # Non-IID: Dirichlet distribution over classes using shuffled indices
+        np.random.seed(seed)
+        num_classes = 7
+        client_indices = [[] for _ in range(num_clients)]
 
-    client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=num_workers) for ds in client_datasets]
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        # For each class, split samples among clients using Dirichlet
+        for class_id in range(num_classes):
+            # Get indices of this class from the SHUFFLED list
+            class_mask = (labels[all_indices] == class_id)
+            class_indices = all_indices[class_mask]
 
-    print(f"✅ Created {num_clients} clients with Dirichlet alpha={alpha if alpha else 'IID'}")
+            if len(class_indices) == 0:
+                continue
+
+            # Draw proportions from Dirichlet
+            proportions = np.random.dirichlet([dirichlet_alpha] * num_clients)
+            # Calculate split sizes
+            split_sizes = (proportions * len(class_indices)).astype(int)
+            # Ensure sum matches exactly
+            split_sizes[-1] = len(class_indices) - sum(split_sizes[:-1])
+
+            start = 0
+            for client_id, size in enumerate(split_sizes):
+                if size > 0:
+                    client_indices[client_id].extend(class_indices[start:start + size].tolist())
+                start += size
+
+        # Shuffle each client's indices to avoid order bias
+        for i in range(num_clients):
+            np.random.shuffle(client_indices[i])
+
+    # Create Subset datasets and loaders
+    client_datasets = [Subset(train_dataset, indices) for indices in client_indices]
+    client_loaders = [DataLoader(ds, batch_size=batch_size, shuffle=True) for ds in client_datasets]
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # Print distribution summary
+    print(f"✅ Created {num_clients} clients with {'IID' if iid else f'non-IID (α={dirichlet_alpha})'} distribution")
     print(f"📚 Total training samples: {len(train_dataset)}")
     print(f"🧪 Test samples: {len(test_dataset)}")
+    if not iid:
+        print("Class distribution per client (class counts):")
+        for i, indices in enumerate(client_indices):
+            client_labels = [labels[idx] for idx in indices]
+            unique, counts = np.unique(client_labels, return_counts=True)
+            dist = dict(zip(unique, counts))
+            print(f"  Client {i+1}: {dist}")
+
     return client_loaders, test_loader
 
+# Alias for backward compatibility
 get_mnist_dataloaders = get_skin_cancer_dataloaders
