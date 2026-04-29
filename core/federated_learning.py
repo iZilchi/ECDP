@@ -1,7 +1,6 @@
 import torch
 import copy
 import time
-import random
 
 class FederatedLearningBase:
     def __init__(self, num_clients, model_class, device):
@@ -14,13 +13,10 @@ class FederatedLearningBase:
 
     def train_round(self, client_loaders, epochs=2):
         start_time = time.time()
-        # All clients participate
-        participating_indices = list(range(self.num_clients))
-        participating_loaders = [client_loaders[i] for i in participating_indices]
-
         global_weights = copy.deepcopy(self.global_model.state_dict())
+
         client_updates = []
-        for loader in participating_loaders:
+        for loader in client_loaders:
             update = self._train_client_get_update(global_weights, loader, epochs)
             client_updates.append(update)
 
@@ -28,11 +24,7 @@ class FederatedLearningBase:
 
         new_weights = {}
         for key in global_weights:
-            # Add the aggregated update if it exists; otherwise keep the original weight (for buffers)
-            if key in aggregated_update:
-                new_weights[key] = global_weights[key] + aggregated_update[key]
-            else:
-                new_weights[key] = global_weights[key]  # buffers stay unchanged
+            new_weights[key] = global_weights[key] + aggregated_update[key]
         self.global_model.load_state_dict(new_weights)
 
         self.round_times.append(time.time() - start_time)
@@ -55,18 +47,11 @@ class FederatedLearningBase:
                 optimizer.step()
 
         new_weights = model.state_dict()
-        update = {}
-        for k in global_weights:
-            # Include all keys, but only trainable ones get a non‑zero update
-            if new_weights[k].dtype in (torch.float, torch.float32, torch.float64):
-                update[k] = new_weights[k] - global_weights[k]
-            else:
-                update[k] = torch.zeros_like(global_weights[k])
+        update = {k: new_weights[k] - global_weights[k] for k in global_weights}
         return update
 
     def _aggregate_updates(self, client_updates):
         avg_update = {}
-        # Use the keys from the first client update (which now includes all keys)
         for key in client_updates[0].keys():
             stacked = torch.stack([up[key].float() for up in client_updates])
             avg_update[key] = stacked.mean(dim=0)
